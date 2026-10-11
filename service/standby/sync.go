@@ -97,7 +97,7 @@ func (t tableInfo) data() bool  { return strings.HasSuffix(t.engine, "MergeTree"
 func listTables(c *common.Conn, dbs []string) ([]tableInfo, error) {
 	q := `SELECT database, name, engine, create_table_query FROM system.tables
 WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema') AND is_temporary = 0
-  AND NOT startsWith(name, '.inner') AND engine IN ('MergeTree', 'ReplacingMergeTree', 'SummingMergeTree',
+  AND NOT startsWith(name, '.inner') AND NOT startsWith(name, '__ckf_stage_') AND engine IN ('MergeTree', 'ReplacingMergeTree', 'SummingMergeTree',
   'AggregatingMergeTree', 'CollapsingMergeTree', 'VersionedCollapsingMergeTree', 'GraphiteMergeTree',
   'ReplicatedMergeTree', 'ReplicatedReplacingMergeTree', 'ReplicatedSummingMergeTree', 'ReplicatedAggregatingMergeTree',
   'ReplicatedCollapsingMergeTree', 'ReplicatedVersionedCollapsingMergeTree', 'ReplicatedGraphiteMergeTree',
@@ -426,23 +426,10 @@ func syncShard(sb *model.Standby, tgt target, t tableInfo, st *model.StandbyTabl
 		}
 		st.LastKey[i] = key
 		if len(changed) > 0 {
-			for _, pid := range changed {
-				if err := sc.Exec(fmt.Sprintf("ALTER TABLE %s DROP PARTITION ID %s", name, lit(pid))); err != nil {
-					return 0, errors.Wrapf(err, "drop partition %s on standby", pid)
-				}
-			}
-			q := fmt.Sprintf("RESTORE TABLE %s PARTITIONS %s FROM %s SETTINGS allow_non_empty_tables = 1",
-				name, idList(changed), tgt.Dest(key))
-			if err := sc.Exec(q); err != nil {
-				// definitions can still differ in ways the column sync doesn't
-				// cover (codecs, settings); the parts themselves fit
-				if !strings.Contains(err.Error(), "different definition") {
-					return 0, errors.Wrap(err, "restore")
-				}
-				log.Logger.Warnf("[standby] %s: %s differs from the primary's definition; restoring anyway", sb.Cluster, t.key())
-				if err := sc.Exec(q + ", allow_different_table_def = 1"); err != nil {
-					return 0, errors.Wrap(err, "restore")
-				}
+			// the standby keeps its current partitions until the new ones
+			// are restored and swapped in: a failed restore leaves no hole
+			if err := stagedReplace(sc, t, changed, tgt.Dest(key)); err != nil {
+				return 0, err
 			}
 		}
 		for _, pid := range changed {
@@ -456,4 +443,112 @@ func syncShard(sb *model.Standby, tgt target, t tableInfo, st *model.StandbyTabl
 		delete(last, pid)
 	}
 	return len(changed), nil
+}
+
+// Staged replace: changed partitions are restored into a staging table next
+// to the real one, then swapped in with REPLACE PARTITION (atomic per
+// partition, replicated to the other standby replicas). The staging table is
+// a non-replicated copy of the real table's structure, so it never touches
+// Keeper.
+
+const stagePrefix = "__ckf_stage_"
+
+func stageName(table string) string {
+	n := stagePrefix + table
+	if len(n) > 200 {
+		n = n[:200]
+	}
+	return n
+}
+
+func stagedReplace(sc *common.Conn, t tableInfo, ids []string, dest string) error {
+	var engineFull string
+	q := fmt.Sprintf("SELECT engine_full FROM system.tables WHERE database = %s AND name = %s", lit(t.db), lit(t.name))
+	if err := sc.QueryRow(q).Scan(&engineFull); err != nil {
+		return errors.Wrap(err, "read the standby table's engine")
+	}
+	engine, err := stagingEngine(engineFull)
+	if err != nil {
+		return err
+	}
+	target := ident(t.db, t.name)
+	stage := ident(t.db, stageName(t.name))
+	_ = sc.Exec("DROP TABLE IF EXISTS " + stage + " SYNC")
+	defer func() { _ = sc.Exec("DROP TABLE IF EXISTS " + stage + " SYNC") }()
+	if err := sc.Exec(fmt.Sprintf("CREATE TABLE %s AS %s ENGINE = %s", stage, target, engine)); err != nil {
+		return errors.Wrap(err, "create staging table")
+	}
+	// the backup holds the replicated definition; the staging table differs
+	// only in not being replicated
+	q = fmt.Sprintf("RESTORE TABLE %s AS %s PARTITIONS %s FROM %s SETTINGS allow_non_empty_tables = 1, allow_different_table_def = 1",
+		target, stage, idList(ids), dest)
+	if err := sc.Exec(q); err != nil {
+		return errors.Wrap(err, "restore into staging (the standby table is unchanged)")
+	}
+	for _, pid := range ids {
+		if err := sc.Exec(fmt.Sprintf("ALTER TABLE %s REPLACE PARTITION ID %s FROM %s", target, lit(pid), stage)); err != nil {
+			return errors.Wrapf(err, "swap in partition %s", pid)
+		}
+	}
+	return nil
+}
+
+// stagingEngine is the engine of a non-replicated copy of a table:
+// "ReplicatedReplacingMergeTree('/path', '{replica}', ver) PARTITION BY ..."
+// becomes "ReplacingMergeTree(ver) PARTITION BY ...". Other engines stay.
+func stagingEngine(engineFull string) (string, error) {
+	if !strings.HasPrefix(engineFull, "Replicated") {
+		return engineFull, nil
+	}
+	nameEnd := strings.IndexFunc(engineFull, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
+	})
+	if nameEnd < 0 {
+		return strings.TrimPrefix(engineFull, "Replicated"), nil
+	}
+	name := strings.TrimPrefix(engineFull[:nameEnd], "Replicated")
+	if engineFull[nameEnd] != '(' {
+		return name + engineFull[nameEnd:], nil // no arguments: default Keeper path
+	}
+	closeAt, args := -1, []string{}
+	depth, inQuote, start := 0, false, nameEnd+1
+	for i := nameEnd; i < len(engineFull) && closeAt < 0; i++ {
+		c := engineFull[i]
+		if inQuote {
+			if c == '\\' {
+				i++
+			} else if c == '\'' {
+				inQuote = false
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			inQuote = true
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				closeAt = i
+				args = append(args, strings.TrimSpace(engineFull[start:i]))
+			}
+		case ',':
+			if depth == 1 {
+				args = append(args, strings.TrimSpace(engineFull[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	if closeAt < 0 {
+		return "", errors.Errorf("can't read engine %q", engineFull)
+	}
+	quoted := func(a string) bool { return strings.HasPrefix(a, "'") }
+	if len(args) >= 2 && quoted(args[0]) && quoted(args[1]) {
+		args = args[2:] // Keeper path and replica name
+	}
+	if len(args) == 1 && args[0] == "" {
+		args = nil
+	}
+	return name + "(" + strings.Join(args, ", ") + ")" + engineFull[closeAt+1:], nil
 }

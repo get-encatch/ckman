@@ -48,3 +48,21 @@ func TestColumnSpec(t *testing.T) {
 		t.Errorf("default: %s", got)
 	}
 }
+
+func TestStagingEngine(t *testing.T) {
+	cases := map[string]string{
+		"ReplicatedMergeTree('/clickhouse/tables/{cluster}/demo/events/{shard}', '{replica}') PARTITION BY toYYYYMMDD(ts) ORDER BY (user_id, ts) SETTINGS index_granularity = 8192": "MergeTree() PARTITION BY toYYYYMMDD(ts) ORDER BY (user_id, ts) SETTINGS index_granularity = 8192",
+		"ReplicatedReplacingMergeTree('/p/{shard}', '{replica}', ver) ORDER BY id":                                                                                                  "ReplacingMergeTree(ver) ORDER BY id",
+		"ReplicatedCollapsingMergeTree('/p', 'r', sign) ORDER BY (a, b)":                                                                                                            "CollapsingMergeTree(sign) ORDER BY (a, b)",
+		"ReplicatedMergeTree ORDER BY id":                                                 "MergeTree ORDER BY id",
+		"ReplicatedGraphiteMergeTree('/p', 'r', 'graphite_rollup') ORDER BY (Path, Time)": "GraphiteMergeTree('graphite_rollup') ORDER BY (Path, Time)",
+		"ReplicatedMergeTree('/a,b(c)', 'it\\'s') ORDER BY id":                            "MergeTree() ORDER BY id",
+		"MergeTree PARTITION BY d ORDER BY id":                                            "MergeTree PARTITION BY d ORDER BY id",
+	}
+	for in, want := range cases {
+		got, err := stagingEngine(in)
+		if err != nil || got != want {
+			t.Errorf("stagingEngine(%q)\n got %q, %v\nwant %q", in, got, err, want)
+		}
+	}
+}
