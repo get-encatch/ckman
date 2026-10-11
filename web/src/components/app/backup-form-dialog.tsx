@@ -12,6 +12,7 @@ import {
   type BackupRequest,
 } from "@/api/data-manage"
 import { tableTreeQuery } from "@/api/observability"
+import { bucketProblem, bucketsQuery, connectionsQuery } from "@/api/storage"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -122,7 +123,10 @@ export function BackupFormDialog({
   const [fullEvery, setFullEvery] = useState(7)
   const [daysBefore, setDaysBefore] = useState(1)
   const [partitions, setPartitions] = useState("")
-  const [target, setTarget] = useState<"s3" | "local">("s3")
+  // "saved" = an S3 connection from the Storage page; "s3" = typed in here
+  const [target, setTarget] = useState<"saved" | "s3" | "local">("saved")
+  const [connectionId, setConnectionId] = useState<string | null>(null)
+  const [bucket, setBucket] = useState("")
   const [s3, setS3] = useState({
     Endpoint: "",
     AccessKeyID: "",
@@ -135,6 +139,20 @@ export function BackupFormDialog({
   const [clean, setClean] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  const connections = useQuery({ ...connectionsQuery(), enabled: open })
+  const hasConnections = (connections.data?.length ?? 0) > 0
+  // fall back to typing S3 settings when no connection has been saved yet
+  const effectiveTarget =
+    target === "saved" && connections.data && !hasConnections ? "s3" : target
+  const buckets = useQuery({
+    ...bucketsQuery(connectionId ?? ""),
+    enabled: open && effectiveTarget === "saved" && !!connectionId,
+  })
+  const newBucket =
+    bucket !== "" &&
+    buckets.data !== undefined &&
+    !buckets.data.includes(bucket)
 
   const summary = useQuery({
     ...tableSummaryQuery(cluster, database ?? ""),
@@ -179,12 +197,17 @@ export function BackupFormDialog({
     const partList = partitions.split(/[\s,]+/).filter(Boolean)
     if (effectiveMode === "named" && partList.length === 0)
       return setError("List the partitions to back up.")
+    if (effectiveTarget === "saved") {
+      if (!connectionId) return setError("Choose a storage connection.")
+      const problem = bucketProblem(bucket)
+      if (problem) return setError(`Bucket: ${problem}`)
+    }
     if (
-      target === "s3" &&
+      effectiveTarget === "s3" &&
       (!s3.Endpoint || !s3.AccessKeyID || !s3.SecretAccessKey || !s3.Bucket)
     )
       return setError("Fill in the S3 endpoint, keys and bucket.")
-    if (target === "local" && !localPath.startsWith("/"))
+    if (effectiveTarget === "local" && !localPath.startsWith("/"))
       return setError("Use an absolute local path.")
 
     const body: BackupRequest = {
@@ -198,12 +221,22 @@ export function BackupFormDialog({
       partitions: effectiveMode === "named" ? partList : undefined,
       days_before: effectiveMode === "new-days" ? daysBefore : undefined,
       full_every: native ? fullEvery : undefined,
-      target,
+      target: effectiveTarget === "local" ? "local" : "s3",
+      connection_id:
+        effectiveTarget === "saved" ? (connectionId ?? undefined) : undefined,
       s3:
-        target === "s3"
-          ? { ...s3, Endpoint: s3.Endpoint.replace(/\/+$/, "") }
-          : undefined,
-      local: target === "local" ? { path: localPath } : undefined,
+        effectiveTarget === "saved"
+          ? {
+              Endpoint: "",
+              AccessKeyID: "",
+              SecretAccessKey: "",
+              Region: "",
+              Bucket: bucket,
+            }
+          : effectiveTarget === "s3"
+            ? { ...s3, Endpoint: s3.Endpoint.replace(/\/+$/, "") }
+            : undefined,
+      local: effectiveTarget === "local" ? { path: localPath } : undefined,
       Compression: compression,
       // native backups chain on each other, so they can't drop partitions,
       // and file checksums only exist for per-partition backups
@@ -445,18 +478,92 @@ export function BackupFormDialog({
           <FieldSet>
             <FieldLegend variant="label">Where</FieldLegend>
             <RadioGroup
-              value={target}
-              onValueChange={(v) => setTarget(v as "s3" | "local")}
-              className="flex gap-6"
+              value={effectiveTarget}
+              onValueChange={(v) => setTarget(v as "saved" | "s3" | "local")}
+              className="flex flex-wrap gap-x-6 gap-y-2"
             >
               <Label className="flex items-center gap-2 font-normal">
-                <RadioGroupItem value="s3" /> S3 or compatible (MinIO…)
+                <RadioGroupItem value="saved" disabled={!hasConnections} />{" "}
+                Saved S3 connection
+              </Label>
+              <Label className="flex items-center gap-2 font-normal">
+                <RadioGroupItem value="s3" /> Other S3 (enter details)
               </Label>
               <Label className="flex items-center gap-2 font-normal">
                 <RadioGroupItem value="local" /> A path on each node
               </Label>
             </RadioGroup>
-            {target === "s3" ? (
+            {connections.data && !hasConnections && (
+              <FieldDescription>
+                Tip: admins can save S3 connections on the Storage page, so
+                backups only need a bucket name.
+              </FieldDescription>
+            )}
+            {effectiveTarget === "saved" && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field>
+                  <FieldLabel>Connection</FieldLabel>
+                  <Select
+                    items={Object.fromEntries(
+                      (connections.data ?? []).map((c) => [
+                        c.connection_id,
+                        c.name,
+                      ])
+                    )}
+                    value={connectionId}
+                    onValueChange={(v) => setConnectionId(v as string)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Choose a connection" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(connections.data ?? []).map((c) => (
+                        <SelectItem
+                          key={c.connection_id}
+                          value={c.connection_id}
+                        >
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="bk-bucket">Bucket</FieldLabel>
+                  <Input
+                    id="bk-bucket"
+                    list="bk-bucket-list"
+                    value={bucket}
+                    onChange={(e) =>
+                      setBucket(e.target.value.toLowerCase().trim())
+                    }
+                    placeholder={
+                      connectionId
+                        ? "Pick or type a new name"
+                        : "Choose a connection first"
+                    }
+                    disabled={!connectionId}
+                    className="font-mono"
+                  />
+                  <datalist id="bk-bucket-list">
+                    {(buckets.data ?? []).map((b) => (
+                      <option key={b} value={b} />
+                    ))}
+                  </datalist>
+                  {newBucket && (
+                    <FieldDescription>
+                      New bucket: it will be created when you save.
+                    </FieldDescription>
+                  )}
+                  {buckets.error && (
+                    <FieldDescription className="text-destructive">
+                      Couldn't list buckets: {buckets.error.message}
+                    </FieldDescription>
+                  )}
+                </Field>
+              </div>
+            )}
+            {effectiveTarget === "s3" && (
               <div className="grid gap-3 sm:grid-cols-2">
                 <Input
                   placeholder="Endpoint, e.g. https://s3.ap-south-1.amazonaws.com"
@@ -492,7 +599,8 @@ export function BackupFormDialog({
                   }
                 />
               </div>
-            ) : (
+            )}
+            {effectiveTarget === "local" && (
               <>
                 <Input
                   placeholder="/backup/clickhouse/"

@@ -15,6 +15,7 @@ import {
   type BackupRun,
   type BackupTask,
 } from "@/api/data-manage"
+import { connectionsQuery } from "@/api/storage"
 import { columnHelper, DataTable } from "@/components/app/data-table"
 import { ErrorState, KeyValue } from "@/components/app/misc"
 import { RunStatusBadge } from "@/components/app/status"
@@ -70,6 +71,10 @@ export function BackupTaskSheet({
     [runsQueries]
   )
   const first = policies[0]
+  const connections = useQuery(connectionsQuery())
+  const connectionName = connections.data?.find(
+    (c) => c.connection_id === first?.connection_id
+  )?.name
   const next = useQuery({
     ...nextRunQuery(first?.policy_id ?? ""),
     enabled: !!first && first.schedule_type === "scheduled" && first.enabled,
@@ -175,7 +180,9 @@ export function BackupTaskSheet({
                 [
                   "Target",
                   first.target_type === "s3"
-                    ? `S3 ${first.s3.Endpoint} · bucket ${first.s3.Bucket}`
+                    ? first.connection_id
+                      ? `Saved connection ${connectionName ?? first.connection_id} · bucket ${first.s3.Bucket}`
+                      : `S3 ${first.s3.Endpoint} · bucket ${first.s3.Bucket}`
                     : `Local path ${first.local.path} on each node`,
                 ],
                 ["Compression", first.compression || "none"],

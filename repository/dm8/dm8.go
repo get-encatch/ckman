@@ -78,6 +78,7 @@ func (mp *DM8Persistent) Init(config interface{}) error {
 		&TblBackupPolicy{},
 		&TblBackupRun{},
 		&TblUser{}, // Phase 1 用户管理
+		&TblStorageConnection{},
 	}); err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -1120,4 +1121,85 @@ func isUniqueViolationDM8(err error) bool {
 
 func NewDM8Persistent() *DM8Persistent {
 	return &DM8Persistent{}
+}
+
+// ─── StorageConnection ───────────────────────────────────────────────────────
+
+func (mp *DM8Persistent) CreateStorageConnection(c model.StorageConnection) error {
+	if c.CreateTime.IsZero() {
+		c.CreateTime = time.Now()
+	}
+	c.UpdateTime = time.Now()
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	tbl := TblStorageConnection{
+		ConnectionID: c.ConnectionID,
+		Name:         c.Name,
+		Type:         c.Type,
+		Config:       dmSchema.Clob(string(raw)),
+		UpdateTime:   c.UpdateTime.Format("2006-01-02 15:04:05.999"),
+	}
+	return wrapError(mp.Client.Create(&tbl).Error)
+}
+
+func (mp *DM8Persistent) UpdateStorageConnection(c model.StorageConnection) error {
+	c.UpdateTime = time.Now()
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	tx := mp.Client.Model(&TblStorageConnection{}).Where("connection_id = ?", c.ConnectionID).Updates(map[string]interface{}{
+		"conn_name":   c.Name,
+		"conn_type":   c.Type,
+		"conn_config": dmSchema.Clob(string(raw)),
+		"update_time": c.UpdateTime.Format("2006-01-02 15:04:05.999"),
+	})
+	if tx.Error != nil {
+		return wrapError(tx.Error)
+	}
+	if tx.RowsAffected == 0 {
+		return repository.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (mp *DM8Persistent) DeleteStorageConnection(connectionID string) error {
+	tx := mp.Client.Where("connection_id = ?", connectionID).Delete(&TblStorageConnection{})
+	if tx.Error != nil {
+		return wrapError(tx.Error)
+	}
+	if tx.RowsAffected == 0 {
+		return repository.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (mp *DM8Persistent) GetStorageConnection(connectionID string) (model.StorageConnection, error) {
+	var tbl TblStorageConnection
+	if err := mp.Client.Where("connection_id = ?", connectionID).First(&tbl).Error; err != nil {
+		return model.StorageConnection{}, wrapError(err)
+	}
+	var c model.StorageConnection
+	if err := json.Unmarshal([]byte(tbl.Config), &c); err != nil {
+		return model.StorageConnection{}, errors.Wrap(err, "")
+	}
+	return c, nil
+}
+
+func (mp *DM8Persistent) GetAllStorageConnections() ([]model.StorageConnection, error) {
+	var tbls []TblStorageConnection
+	if err := mp.Client.Order("conn_name").Find(&tbls).Error; err != nil {
+		return nil, wrapError(err)
+	}
+	out := make([]model.StorageConnection, 0, len(tbls))
+	for _, tbl := range tbls {
+		var c model.StorageConnection
+		if err := json.Unmarshal([]byte(tbl.Config), &c); err != nil {
+			return nil, errors.Wrap(err, "")
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }

@@ -45,5 +45,7 @@ func GuestPolicies() []Policy {
 		{"/data_manage/backup/*", GET},
 		{"/data_manage/disks/*", GET},
 		{"/data_manage/tables/*", GET},
+		{"/storage/connections", GET},   // names and endpoints only, no secrets
+		{"/storage/connections/*", GET}, // bucket lists, for the backup form
 	}
 }

@@ -110,3 +110,15 @@ func tblUserToModel(t TblUser) model.CkmanUser {
 		UpdatedAt:    t.UpdatedAt.Unix(),
 	}
 }
+
+// TblStorageConnection: saved S3 connections; the whole StorageConnection is
+// stored as JSON (secret key already encrypted by the service layer).
+type TblStorageConnection struct {
+	ConnectionID string `gorm:"column:connection_id;primaryKey;size:64"`
+	Name         string `gorm:"column:conn_name;size:128"`
+	Type         string `gorm:"column:conn_type;size:16"`
+	Config       string `gorm:"column:conn_config;type:TEXT"`
+	UpdateTime   string `gorm:"column:update_time;size:32"`
+}
+
+func (TblStorageConnection) TableName() string { return SQLITE_TBL_STORAGE_CONN }

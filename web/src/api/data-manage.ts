@@ -37,6 +37,7 @@ export type BackupPolicy = {
   range_end_date: string
   partitions: string[] | null
   target_type: "s3" | "local"
+  connection_id?: string // saved storage connection; s3 then only has Bucket
   s3: S3Target
   local: { path: string }
   compression: string
@@ -211,6 +212,7 @@ export type BackupRequest = {
   range_start_date?: string
   range_end_date?: string
   target: "s3" | "local"
+  connection_id?: string
   s3?: S3Target
   local?: { path: string }
   Compression: string

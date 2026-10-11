@@ -15,6 +15,7 @@ const (
 	MYSQL_TBL_TASK          string = "tbl_task"
 	MYSQL_TBL_BACKUP        string = "tbl_backup"
 	MYSQL_TBL_BACKUP_POLICY string = "tbl_backup_policy"
+	MYSQL_TBL_STORAGE_CONN  string = "tbl_storage_connection"
 	MYSQL_TBL_BACKUP_RUN    string = "tbl_backup_run"
 	MYSQL_TBL_USER          string = "tbl_user"
 )

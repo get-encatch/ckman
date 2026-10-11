@@ -113,3 +113,14 @@ func tblUserToModel(t TblUser) model.CkmanUser {
 		UpdatedAt:    t.UpdatedAt.Unix(),
 	}
 }
+
+// TblStorageConnection: saved S3 connections, stored as JSON.
+type TblStorageConnection struct {
+	ConnectionID string `gorm:"column:connection_id;primaryKey"`
+	Name         string `gorm:"column:conn_name"`
+	Type         string `gorm:"column:conn_type"`
+	Config       string `gorm:"column:conn_config"`
+	UpdateTime   string `gorm:"column:update_time"`
+}
+
+func (v TblStorageConnection) TableName() string { return PG_TBL_STORAGE_CONN }

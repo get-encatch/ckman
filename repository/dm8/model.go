@@ -90,3 +90,13 @@ func tblUserToModel(t TblUser) model.CkmanUser {
 		UpdatedAt:    t.UpdatedAt.Unix(),
 	}
 }
+
+// TblStorageConnection: saved S3 connections, stored as JSON. Table name
+// follows gorm's default pluralisation like the other DM8 tables.
+type TblStorageConnection struct {
+	ConnectionID string        `gorm:"column:CONNECTION_ID;primaryKey;size:64"`
+	Name         string        `gorm:"column:CONN_NAME;size:128"`
+	Type         string        `gorm:"column:CONN_TYPE;size:16"`
+	Config       dmSchema.Clob `gorm:"column:CONN_CONFIG;size:1024000"`
+	UpdateTime   string        `gorm:"column:UPDATE_TIME"`
+}

@@ -120,6 +120,7 @@ type BackupRequest struct {
 	RangeStartDate string      `json:"range_start_date"`           //一次性时间区间开始日期，格式 YYYYMMDD
 	RangeEndDate   string      `json:"range_end_date"`             //一次性时间区间结束日期，格式 YYYYMMDD
 	Target         string      `json:"target"`                     //备份目标： 本地，S3
+	ConnectionID   string      `json:"connection_id"`              //S3 时可选：保存的存储连接；此时 s3 只需 Bucket
 	Local          TargetLocal `json:"local"`                      //本地备份路径
 	S3             TargetS3    `json:"s3"`                         //S3配置
 	Compression    string      `json:"Compression" example:"gzip"` //压缩类型： 不压缩，gzip/gz, brotli/br, xz/LZMA, zstd/zst
@@ -184,7 +185,8 @@ type BackupPolicy struct {
 	RangeStartDate string      `json:"range_start_date"`
 	RangeEndDate   string      `json:"range_end_date"`
 	Partitions     []string    `json:"partitions"`
-	TargetType     string      `json:"target_type"` // s3 | local
+	TargetType     string      `json:"target_type"`             // s3 | local
+	ConnectionID   string      `json:"connection_id,omitempty"` // saved StorageConnection; S3 then only holds Bucket
 	S3             TargetS3    `json:"s3"`
 	Local          TargetLocal `json:"local"`
 	Compression    string      `json:"compression"`
