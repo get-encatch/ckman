@@ -98,6 +98,9 @@ func (d *KeeperDeploy) Init() error {
 }
 
 func (d *KeeperDeploy) Prepare() error {
+	if d.Conf.IsDocker() {
+		return d.dockerPrepare()
+	}
 	d.Conf.Normalize()
 	file := path.Join(common.GetPkgPath(), common.DefaultPackageDirectory, d.Packages.Keeper)
 
@@ -132,6 +135,9 @@ func (d *KeeperDeploy) Prepare() error {
 }
 
 func (d *KeeperDeploy) Install() error {
+	if d.Conf.IsDocker() {
+		return d.dockerInstall()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	cmds := make([]string, 0)
@@ -192,6 +198,9 @@ func (d *KeeperDeploy) Install() error {
 }
 
 func (d *KeeperDeploy) Uninstall() error {
+	if d.Conf.IsDocker() {
+		return d.dockerUninstall()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	cmds := make([]string, 0)
@@ -233,6 +242,9 @@ func (d *KeeperDeploy) Uninstall() error {
 }
 
 func (d *KeeperDeploy) Upgrade() error {
+	if d.Conf.IsDocker() {
+		return d.dockerUpgrade()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	cmd := cmdIns.UpgradeCmd(KeeperSvrName, d.Packages)
@@ -268,6 +280,11 @@ func (d *KeeperDeploy) Upgrade() error {
 }
 
 func (d *KeeperDeploy) Config() error {
+	if d.Conf.IsDocker() {
+		// configs are uploaded as root with mode 0600: hand them to the
+		// container's clickhouse user so running servers can reload them
+		defer func() { _ = d.dockerOwnConfigs() }()
+	}
 	d.Conf.Normalize()
 	confFiles := make([]string, 0)
 
@@ -351,6 +368,9 @@ func (d *KeeperDeploy) Config() error {
 }
 
 func (d *KeeperDeploy) Start() error {
+	if d.Conf.IsDocker() {
+		return d.dockerStart()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	var lastError error
@@ -402,6 +422,9 @@ func (d *KeeperDeploy) Start() error {
 }
 
 func (d *KeeperDeploy) Stop() error {
+	if d.Conf.IsDocker() {
+		return d.dockerStop()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	var lastError error
@@ -437,6 +460,9 @@ func (d *KeeperDeploy) Stop() error {
 }
 
 func (d *KeeperDeploy) Restart() error {
+	if d.Conf.IsDocker() {
+		return d.dockerRestart()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	var lastError error

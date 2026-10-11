@@ -22,6 +22,8 @@ import (
 	"github.com/housepower/ckman/log"
 	"github.com/housepower/ckman/model"
 	"github.com/housepower/ckman/service/clickhouse"
+	"github.com/housepower/ckman/service/fleet"
+	"github.com/housepower/ckman/service/fleetdeploy"
 	"github.com/housepower/ckman/service/zookeeper"
 )
 
@@ -1361,13 +1363,21 @@ func (controller *ClickHouseController) UpgradeCluster(c *gin.Context) {
 	}
 
 	d := deploy.NewCkDeploy(conf)
-	d.Packages = deploy.BuildPackages(req.PackageVersion, conf.PkgType, conf.Cwd)
+	if conf.IsDocker() {
+		if ok, err := fleet.ImageVersionExists(conf.Docker.Image, req.PackageVersion); err == nil && !ok {
+			controller.wrapfunc(c, model.E_INVALID_VARIABLE, errors.Errorf("Docker Hub has no %s:%s", conf.Docker.Image, req.PackageVersion))
+			return
+		}
+		d.Conf.PkgName = conf.Docker.Image + ":" + req.PackageVersion
+	} else {
+		d.Packages = deploy.BuildPackages(req.PackageVersion, conf.PkgType, conf.Cwd)
+	}
 	d.Ext.Policy = req.Policy
 	d.Ext.CurClusterOnly = true
 	d.Ext.SkipKeeper = req.SkipKeeper
 	d.Conf.Hosts = chHosts
 
-	if conf.Keeper == model.ClickhouseKeeper {
+	if conf.Keeper == model.ClickhouseKeeper && !conf.IsDocker() {
 		if d.Packages.Keeper == "" {
 			controller.wrapfunc(c, model.E_INVALID_VARIABLE, errors.New("keeper is empty"))
 			return
@@ -1837,15 +1847,23 @@ func (controller *ClickHouseController) AddNode(c *gin.Context) {
 	d.Conf.Hosts = req.Ips
 	d.Ext.SourceSchemaHost = req.SourceSchemaHost
 
-	d.Packages = deploy.BuildPackages(conf.Version, conf.PkgType, conf.Cwd)
-	if reflect.DeepEqual(d.Packages, deploy.Packages{}) {
-		err := errors.Errorf("package %s %s not found in localpath", conf.Version, conf.PkgType)
-		controller.wrapfunc(c, model.E_DATA_MISMATCHED, err)
-		return
+	if conf.IsDocker() {
+		if err := fleetdeploy.CheckNewNodes(&conf, req.Ips, force); err != nil {
+			controller.wrapfunc(c, model.E_DATA_CHECK_FAILED, err)
+			return
+		}
+	} else {
+		d.Packages = deploy.BuildPackages(conf.Version, conf.PkgType, conf.Cwd)
+		if reflect.DeepEqual(d.Packages, deploy.Packages{}) {
+			err := errors.Errorf("package %s %s not found in localpath", conf.Version, conf.PkgType)
+			controller.wrapfunc(c, model.E_DATA_MISMATCHED, err)
+			return
+		}
 	}
 	d.Conf.Shards = shards
 
-	if !force {
+	// on shared Docker machines pidof would see other clusters' servers
+	if !force && !conf.IsDocker() {
 		if err := common.CheckCkInstance(d.Conf); err != nil {
 			controller.wrapfunc(c, model.E_DATA_CHECK_FAILED, err)
 			return
@@ -2127,7 +2145,7 @@ func (controller *ClickHouseController) GetLog(c *gin.Context) {
 	}
 
 	var logPath, logName string
-	if strings.Contains(conf.PkgType, "tgz") {
+	if strings.Contains(conf.PkgType, "tgz") || conf.IsDocker() {
 		logPath = path.Join(conf.Cwd, "log", "clickhouse-server")
 	} else {
 		logPath = "/var/log/clickhouse-server"

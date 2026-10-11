@@ -319,6 +319,9 @@ func CKUpgradeHandle(ctx context.Context, task *model.Task) error {
 		return err
 	}
 	conf.Version = d.Conf.Version
+	if conf.IsDocker() {
+		conf.PkgName = d.Conf.PkgName // the image tag
+	}
 
 	if err = repository.Ps.UpdateCluster(conf); err != nil {
 		return errors.Wrapf(err, "[%s]", model.NodeStatusStore.EN)

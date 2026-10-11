@@ -147,3 +147,111 @@ export const formatLabels = (labels: Record<string, string> | null) =>
   Object.entries(labels ?? {})
     .map(([k, v]) => (v ? `${k}=${v}` : k))
     .join("\n")
+
+// ---- Clusters on the fleet (Docker) ----------------------------------------
+
+export type DockerPorts = {
+  tcp: number
+  http: number
+  interserver: number
+  prometheus: number
+  keeper_tcp: number
+  keeper_raft: number
+}
+
+export type DockerConf = {
+  image: string
+  keeper_image: string
+  cpu: number
+  memory_mb: number
+  disk_gb: number
+  keeper_cpu: number
+  keeper_memory_mb: number
+  keeper_disk_gb: number
+  port_slot: number
+  ports: DockerPorts
+}
+
+export type Resources = {
+  cpu: number
+  memory_mb: number
+  disk_gb: number
+  keeper_cpu: number
+  keeper_memory_mb: number
+  keeper_disk_gb: number
+}
+
+export type FleetClusterRequest = Resources & {
+  cluster: string
+  comment: string
+  version: string
+  shards: string[][] // machine IDs: shards[i][j] = replica j of shard i
+  keepers: string[] // machine IDs
+  password: string
+  allow_overcommit: boolean
+}
+
+export type PlanMachine = {
+  id: string
+  name: string
+  zone: string
+  roles: string[]
+  cpu: number
+  cpu_total: number
+  mem: number
+  mem_total: number
+  disk: number
+  disk_total: number
+}
+
+export type FleetPlan = {
+  errors: string[]
+  warnings: string[]
+  port_slot: number
+  ports: DockerPorts
+  machines: PlanMachine[]
+}
+
+export const versionsQuery = (image: "server" | "keeper" = "server") =>
+  queryOptions({
+    queryKey: ["fleet-versions", image],
+    queryFn: async () =>
+      (await api.get<string[] | null>("/api/v1/fleet/versions", { image })) ??
+      [],
+    staleTime: 60 * 60_000,
+  })
+
+export function planCluster(body: FleetClusterRequest) {
+  return api.post<FleetPlan>("/api/v1/fleet/clusters/plan", body)
+}
+
+export function createFleetCluster(body: FleetClusterRequest) {
+  return api.post<{ task_id: string; plan: FleetPlan }>(
+    "/api/v1/fleet/clusters",
+    body
+  )
+}
+
+export function resizeCluster(
+  cluster: string,
+  body: Resources & { allow_overcommit: boolean }
+) {
+  return api.put<{ resized: string[] }>(
+    `/api/v1/fleet/cluster/${enc(cluster)}/resources`,
+    body
+  )
+}
+
+// label filter "role=keeper" / "zone=zone-a" / "disk"; empty matches all
+export function matchesFilter(m: Machine, filter: string) {
+  const terms = filter
+    .split(/[\s,]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+  return terms.every((t) => {
+    const [k, v] = t.split("=")
+    const value = k === "zone" ? m.zone : m.labels?.[k]
+    if (value === undefined) return false
+    return v === undefined || value === v
+  })
+}

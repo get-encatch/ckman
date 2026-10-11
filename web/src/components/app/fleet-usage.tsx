@@ -7,8 +7,10 @@ export function CapacityBar({
   reserved,
   total,
   format,
+  usedLabel = "used",
   className,
 }: {
+  usedLabel?: string
   used: number
   reserved?: number
   total: number
@@ -43,7 +45,7 @@ export function CapacityBar({
         />
       </div>
       <span className="text-xs text-muted-foreground tabular-nums">
-        {format(used)} used
+        {format(used)} {usedLabel}
         {reserved !== undefined && reserved > 0 && (
           <span className={cn(over && "text-red-600 dark:text-red-400")}>
             {" "}

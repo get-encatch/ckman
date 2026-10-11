@@ -9,6 +9,7 @@ import (
 
 	"github.com/housepower/ckman/common"
 	"github.com/housepower/ckman/model"
+	"github.com/housepower/ckman/service/fleet"
 )
 
 // KeeperHostStats is the health of one ClickHouse Keeper server: the machine
@@ -45,6 +46,9 @@ type keeperStatsEntry struct {
 func GetKeeperHostStats(conf *model.CKManClickHouseConfig) []KeeperHostStats {
 	if conf.Keeper != model.ClickhouseKeeper || conf.KeeperConf == nil {
 		return nil
+	}
+	if conf.IsDocker() {
+		return dockerKeeperStats(conf)
 	}
 	keeperStatsCache.Lock()
 	if e, ok := keeperStatsCache.m[conf.Cluster]; ok && time.Since(e.at) < keeperStatsTTL {
@@ -124,4 +128,25 @@ true`, strings.ReplaceAll(path, "'", ""))
 		}
 	}
 	return s
+}
+
+// dockerKeeperStats reports each Keeper container against its limits.
+func dockerKeeperStats(conf *model.CKManClickHouseConfig) []KeeperHostStats {
+	out := make([]KeeperHostStats, 0, len(conf.KeeperConf.KeeperNodes))
+	for _, host := range conf.KeeperConf.KeeperNodes {
+		s := KeeperHostStats{Host: host}
+		c, ok := fleet.Container(conf.Cluster, "keeper", host)
+		if !ok {
+			s.Error = "no Keeper container found on " + host
+			out = append(out, s)
+			continue
+		}
+		s.Cores = int(c.CPULimit + 0.999)
+		s.Load1 = c.CPUPercent / 100
+		s.MemUsed, s.MemTotal = c.MemUsed, c.MemLimit
+		s.DiskUsed, s.DiskTotal = c.DiskUsed, c.DiskLimit
+		s.DataBytes, s.ProcRSS = c.DiskUsed, c.MemUsed
+		out = append(out, s)
+	}
+	return out
 }

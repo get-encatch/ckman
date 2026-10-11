@@ -48,7 +48,8 @@ func NewZkService(nodes []string, port int, sessionTimeout int) (*ZkService, err
 		}
 		err = json.Unmarshal(body, &tmp)
 		if err == nil {
-			if tmp.ServerState == "leader" {
+			// a single-server ensemble reports "standalone", not "leader"
+			if tmp.ServerState == "leader" || tmp.ServerState == "standalone" {
 				leader = node
 				break
 			}

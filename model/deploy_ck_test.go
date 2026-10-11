@@ -243,6 +243,7 @@ func TestSingleNodeConfig_FieldClassification(t *testing.T) {
 		"Comment":          true,
 		"PkgType":          true,
 		"PkgName":          true,
+		"Docker":           true, // container placement and limits: not needed to connect
 		"Version":          true,
 		"Cwd":              true,
 		"LogicCluster":     true,

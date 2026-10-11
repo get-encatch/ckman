@@ -49,8 +49,12 @@ func ApplyNodeOverride(conf *model.CKManClickHouseConfig, host, xmlContent strin
 	if err := common.ScpUploadFile(tmp.FullName, remote, sshOpts); err != nil {
 		return false, "", errors.Wrap(err, "scp upload")
 	}
-	if conf.NeedSudo {
-		if _, err := common.RemoteExecute(sshOpts, fmt.Sprintf("chown clickhouse:clickhouse %s", remote)); err != nil {
+	if conf.NeedSudo || conf.IsDocker() {
+		owner := "clickhouse:clickhouse"
+		if conf.IsDocker() {
+			owner = "101:101" // the clickhouse user inside the container
+		}
+		if _, err := common.RemoteExecute(sshOpts, fmt.Sprintf("chown %s %s", owner, remote)); err != nil {
 			log.Logger.Warnf("chown node_override.xml on %s failed: %v", host, err)
 		}
 	}

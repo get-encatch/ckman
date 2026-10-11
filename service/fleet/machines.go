@@ -1,7 +1,6 @@
 package fleet
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net"
 	"regexp"
@@ -253,8 +252,7 @@ func sshOpts(m model.Machine) common.SshOptions {
 // ';') prefixes the whole script for non-root users. Errors carry the
 // script's output, not the script.
 func Run(m model.Machine, script string) (string, error) {
-	b64 := base64.StdEncoding.EncodeToString([]byte(script))
-	out, err := common.RemoteExecute(sshOpts(m), fmt.Sprintf(`sh -c "$(echo %s | base64 -d)"`, b64))
+	out, err := common.RemoteExecute(sshOpts(m), common.ScriptCmd(script))
 	if err != nil {
 		return out, cleanErr(m, err)
 	}
