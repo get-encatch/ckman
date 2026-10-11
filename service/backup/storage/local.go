@@ -36,22 +36,18 @@ func (l *Local) Type() string { return model.BACKUP_LOCAL }
 
 // BackupSQL 返回 BACKUP TABLE … 语句的尾部子句（PARTITION + TO File(…) + SETTINGS）。
 // partition="all" 时省略 PARTITION 子句。
-func (l *Local) BackupSQL(database, table, partition, key string) string {
+func (l *Local) BackupSQL(database, table, partition, partitionID, key string) string {
 	var sb strings.Builder
-	if partition != "all" {
-		sb.WriteString(fmt.Sprintf(" PARTITION '%s'", strings.ReplaceAll(partition, "'", "''")))
-	}
+	sb.WriteString(PartitionClause(partition, partitionID))
 	sb.WriteString(fmt.Sprintf(" TO File('%s/%s')", l.cfg.Path, key))
 	sb.WriteString(backupSettings(l.compression))
 	return sb.String()
 }
 
 // RestoreSQL 返回 RESTORE TABLE … 语句的尾部子句（PARTITION + FROM File(…) + SETTINGS）。
-func (l *Local) RestoreSQL(database, table, partition, key string) string {
+func (l *Local) RestoreSQL(database, table, partition, partitionID, key string) string {
 	var sb strings.Builder
-	if partition != "all" {
-		sb.WriteString(fmt.Sprintf(" PARTITION '%s'", strings.ReplaceAll(partition, "'", "''")))
-	}
+	sb.WriteString(PartitionClause(partition, partitionID))
 	sb.WriteString(fmt.Sprintf(" FROM File('%s/%s')", l.cfg.Path, key))
 	sb.WriteString(restoreSettings())
 	return sb.String()
@@ -117,4 +113,20 @@ func (l *Local) CheckPartition(host, keyPrefix string,
 		}
 	}
 	return nil
+}
+
+// NativeBackupSQL returns the tail of a whole-table BACKUP TABLE to the node's
+// local path; with a baseKey only parts missing from that backup are stored.
+func (l *Local) NativeBackupSQL(key, baseKey string) string {
+	base := ""
+	if baseKey != "" {
+		base = fmt.Sprintf("File('%s/%s')", l.cfg.Path, baseKey)
+	}
+	return fmt.Sprintf(" TO File('%s/%s')", l.cfg.Path, key) + nativeBackupSettings(l.compression, base)
+}
+
+// NativeRestoreSQL returns the tail of a RESTORE TABLE from a native backup,
+// limited to partitionIDs (whole table when empty).
+func (l *Local) NativeRestoreSQL(partitionIDs []string, key string) string {
+	return PartitionsClause(partitionIDs) + fmt.Sprintf(" FROM File('%s/%s')", l.cfg.Path, key)
 }

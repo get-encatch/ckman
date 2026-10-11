@@ -87,7 +87,7 @@ func (a *ClickHouseAdapter) ConnFactory(cluster string, maxBandwidthMB int) ([]*
 				log.Logger.Warnf("[backup] shard %d replica %s unreachable: %v", idx, replica.Ip, derr)
 				continue
 			}
-			got = &shardConn{host: replica.Ip, conn: conn, cluster: cc.Cluster}
+			got = &shardConn{host: replica.Ip, conn: conn, cluster: cc.Cluster, shard: idx + 1}
 			break
 		}
 		if got == nil {
@@ -246,7 +246,9 @@ func successfulPartitionsFromRuns(runs []model.BackupRun) []model.BackupRunParti
 	partitions := make([]model.BackupRunPartition, 0)
 	for _, r := range runs {
 		// 只排除明确的 restore；老版本迁移来的 run Operation 可能为空，视为 backup
-		if r.Operation == model.OP_RESTORE {
+		// Native (whole-table) runs keep their own chain and don't take part in
+		// per-partition dedup.
+		if r.Operation == model.OP_RESTORE || r.Native {
 			continue
 		}
 		for _, p := range r.Partitions {
@@ -343,4 +345,58 @@ func (a *ClickHouseAdapter) CollectChecksumOnHost(c *shardConn, run *model.Backu
 		run.Partitions[i].FileNum = uint64(fileNum)
 	}
 	return nil
+}
+
+// PartitionIDs maps each active partition name of the table to its
+// ClickHouse partition_id, across all shards.
+func (a *ClickHouseAdapter) PartitionIDs(c *shardConn, db, table string) (map[string]string, error) {
+	if c == nil || c.conn == nil {
+		return nil, fmt.Errorf("PartitionIDs: nil conn")
+	}
+	query := fmt.Sprintf(
+		"SELECT DISTINCT partition, partition_id FROM clusterAllReplicas('%s', system.parts) WHERE database = '%s' AND `table` = '%s' AND active = 1",
+		c.cluster, strings.ReplaceAll(db, "'", "''"), strings.ReplaceAll(table, "'", "''"),
+	)
+	rows, err := c.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := map[string]string{}
+	for rows.Next() {
+		var name, id string
+		if err := rows.Scan(&name, &id); err != nil {
+			return nil, err
+		}
+		ids[name] = id
+	}
+	return ids, nil
+}
+
+// NativeInventory lists the table's active partitions with row, byte and
+// part totals over all shards (one replica each), for whole-table backups.
+func (a *ClickHouseAdapter) NativeInventory(c *shardConn, db, table string) ([]model.BackupRunPartition, error) {
+	if c == nil || c.conn == nil {
+		return nil, fmt.Errorf("NativeInventory: nil conn")
+	}
+	query := fmt.Sprintf(
+		"SELECT partition, partition_id, sum(rows), sum(bytes_on_disk), count() FROM cluster('%s', system.parts) "+
+			"WHERE database = '%s' AND `table` = '%s' AND active = 1 GROUP BY partition, partition_id ORDER BY partition",
+		c.cluster, strings.ReplaceAll(db, "'", "''"), strings.ReplaceAll(table, "'", "''"),
+	)
+	rows, err := c.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.BackupRunPartition
+	for rows.Next() {
+		var p model.BackupRunPartition
+		if err := rows.Scan(&p.Partition, &p.PartitionID, &p.Rows, &p.Size, &p.FileNum); err != nil {
+			return nil, err
+		}
+		p.Status = model.BACKUP_PARTITION_STATUS_WAITING
+		out = append(out, p)
+	}
+	return out, nil
 }

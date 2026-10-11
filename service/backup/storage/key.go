@@ -49,3 +49,19 @@ func JoinRunKey(storagePrefix, partition, db, table, host string) string {
 	}
 	return p + "/" + base
 }
+
+// JoinNativeKey is the storage key of one shard's whole-table native backup:
+//
+//	[storagePrefix/]native/<db>.<table>/<runID>/shard<N>
+//
+// It is keyed by shard number rather than host so that a later incremental
+// (base_backup) or a restore finds it even when a different replica of the
+// shard answers.
+func JoinNativeKey(storagePrefix, db, table, runID string, shard int) string {
+	base := fmt.Sprintf("native/%s.%s/%s/shard%d", db, table, runID, shard)
+	p := strings.Trim(storagePrefix, "/")
+	if p == "" {
+		return base
+	}
+	return p + "/" + base
+}

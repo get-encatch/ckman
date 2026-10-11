@@ -35,11 +35,9 @@ func (s *S3) Init() error {
 
 func (s *S3) Type() string { return model.BACKUP_S3 }
 
-func (s *S3) BackupSQL(database, table, partition, key string) string {
+func (s *S3) BackupSQL(database, table, partition, partitionID, key string) string {
 	var sb strings.Builder
-	if partition != "all" {
-		sb.WriteString(fmt.Sprintf(" PARTITION '%s'", escapeSQLLiteral(partition)))
-	}
+	sb.WriteString(PartitionClause(partition, partitionID))
 	sb.WriteString(fmt.Sprintf(" TO S3('%s/%s/%s', '%s', '%s')",
 		s.cfg.Endpoint, s.cfg.Bucket, key,
 		escapeSQLLiteral(s.cfg.AccessKeyID),
@@ -48,11 +46,9 @@ func (s *S3) BackupSQL(database, table, partition, key string) string {
 	return sb.String()
 }
 
-func (s *S3) RestoreSQL(database, table, partition, key string) string {
+func (s *S3) RestoreSQL(database, table, partition, partitionID, key string) string {
 	var sb strings.Builder
-	if partition != "all" {
-		sb.WriteString(fmt.Sprintf(" PARTITION '%s'", escapeSQLLiteral(partition)))
-	}
+	sb.WriteString(PartitionClause(partition, partitionID))
 	sb.WriteString(fmt.Sprintf(" FROM S3('%s/%s/%s', '%s', '%s')",
 		s.cfg.Endpoint, s.cfg.Bucket, key,
 		escapeSQLLiteral(s.cfg.AccessKeyID),
@@ -82,4 +78,28 @@ func (s *S3) CheckPartition(host, keyPrefix string, pathInfo map[string]model.Pa
 
 func escapeSQLLiteral(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
+}
+
+// dest is the S3(...) table function for key.
+func (s *S3) dest(key string) string {
+	return fmt.Sprintf("S3('%s/%s/%s', '%s', '%s')",
+		s.cfg.Endpoint, s.cfg.Bucket, key,
+		escapeSQLLiteral(s.cfg.AccessKeyID),
+		escapeSQLLiteral(s.cfg.SecretAccessKey))
+}
+
+// NativeBackupSQL returns the tail of a whole-table BACKUP TABLE; with a
+// baseKey the backup only stores parts that aren't in that earlier backup.
+func (s *S3) NativeBackupSQL(key, baseKey string) string {
+	base := ""
+	if baseKey != "" {
+		base = s.dest(baseKey)
+	}
+	return " TO " + s.dest(key) + nativeBackupSettings(s.compression, base)
+}
+
+// NativeRestoreSQL returns the tail of a RESTORE TABLE from a native backup,
+// limited to partitionIDs (whole table when empty).
+func (s *S3) NativeRestoreSQL(partitionIDs []string, key string) string {
+	return PartitionsClause(partitionIDs) + " FROM " + s.dest(key)
 }

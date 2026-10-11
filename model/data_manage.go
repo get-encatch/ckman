@@ -9,6 +9,14 @@ const (
 	// BackupStyle: 全量 / 增量
 	BACKUP_STYLE_FULL = "full"
 	BACKUP_STYLE_INCR = "incremental"
+	// BACKUP_STYLE_NATIVE backs up the whole table with one BACKUP TABLE per
+	// shard and makes each run incremental on the previous one through
+	// ClickHouse's base_backup setting (only changed data parts are copied).
+	BACKUP_STYLE_NATIVE = "native"
+
+	// DEFAULT_NATIVE_FULL_EVERY is how many native runs share one chain:
+	// every N-th run starts over with a full backup.
+	DEFAULT_NATIVE_FULL_EVERY = 7
 
 	// BackupType: 增量备份的方式（按分区 / 按日期）
 	BACKUP_TYPE_PARTITION = "partition"
@@ -118,6 +126,7 @@ type BackupRequest struct {
 	Clean          bool        `json:"clean"`                      //是否清理本地数据
 	Checksum       bool        `json:"checksum"`                   //是否进行md5校验
 	MaxBandwidthMB int         `json:"max_bandwidth_mb"`           //S3上传限速(MB/s)，单个任务的集群总量，按shard数均分；0不限
+	FullEvery      int         `json:"full_every"`                 //native 模式：每 N 次做一次全量，0 为默认值
 }
 
 type RestoreRequest struct {
@@ -181,6 +190,7 @@ type BackupPolicy struct {
 	Compression    string      `json:"compression"`
 	Checksum       bool        `json:"checksum"`
 	MaxBandwidthMB int         `json:"max_bandwidth_mb"` // S3 上传限速(MB/s)，集群总量；0 不限。仅 backup + S3 生效
+	FullEvery      int         `json:"full_every"`       // native: full backup every N runs; 0 = DEFAULT_NATIVE_FULL_EVERY
 	Clean          bool        `json:"clean"`
 	Enabled        bool        `json:"enabled"`
 	Deleted        bool        `json:"deleted"`
@@ -199,7 +209,11 @@ type BackupRun struct {
 	Instance      string               `json:"instance"`
 	Status        string               `json:"status"` // queued | running | success | failed | skipped | interrupted
 	StatusReason  string               `json:"status_reason"`
-	StoragePrefix string               `json:"storage_prefix"` // S3/local key 中位于 partition 之前的层级；新 run 填 cluster_name，老 run 反序列化为 "" 兼容老路径
+	StoragePrefix string               `json:"storage_prefix"`          // S3/local key 中位于 partition 之前的层级；新 run 填 cluster_name，老 run 反序列化为 "" 兼容老路径
+	Native        bool                 `json:"native,omitempty"`        // whole-table native backup (BACKUP_STYLE_NATIVE) or a restore from one
+	BaseRunID     string               `json:"base_run_id,omitempty"`   // native backup: run this one is incremental on; "" = full
+	NativeShards  int                  `json:"native_shards,omitempty"` // native backup: shard count when it ran (one backup per shard)
+	SourceRunID   string               `json:"source_run_id,omitempty"` // restore: the backup run it reads from
 	Partitions    []BackupRunPartition `json:"partitions"`
 	StartedAt     time.Time            `json:"started_at"`
 	FinishedAt    time.Time            `json:"finished_at"`
@@ -209,14 +223,26 @@ type BackupRun struct {
 }
 
 type BackupRunPartition struct {
-	Partition string              `json:"partition"`
-	Status    string              `json:"status"`
-	Size      uint64              `json:"size"`
-	Rows      uint64              `json:"rows"`
-	FileNum   uint64              `json:"file_num"`
-	Elapsed   int                 `json:"elapsed"`
-	Msg       string              `json:"msg"`
-	PathInfo  map[string]PathInfo `json:"-"` // 仅 checksum=true 时填充，不入库
+	Partition   string              `json:"partition"`
+	PartitionID string              `json:"partition_id,omitempty"` // ClickHouse partition_id; "all" for an unpartitioned table
+	Status      string              `json:"status"`
+	Size        uint64              `json:"size"`
+	Rows        uint64              `json:"rows"`
+	FileNum     uint64              `json:"file_num"`
+	Elapsed     int                 `json:"elapsed"`
+	Msg         string              `json:"msg"`
+	PathInfo    map[string]PathInfo `json:"-"` // 仅 checksum=true 时填充，不入库
+}
+
+// KeySegment is the partition's path segment in backup storage keys. The
+// partition ID is always path-safe ("tuple()" becomes "all", string keys get
+// a hash); runs recorded before IDs were stored keep using the name, so their
+// existing backups are still found.
+func (p BackupRunPartition) KeySegment() string {
+	if p.PartitionID != "" {
+		return p.PartitionID
+	}
+	return p.Partition
 }
 
 // DeletePartitionRecordsRequest 删除分区备份记录:按分区名作用于该表全部历史的所有终态 run。

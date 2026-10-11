@@ -53,8 +53,12 @@ func (s *Service) DeletePartitionRecords(cluster, database, table string, partit
 	}
 	target := make(map[string]bool, len(partitions))
 	for _, p := range partitions {
-		if err := ValidateIdentifier(p); err != nil {
-			return result, fmt.Errorf("invalid partition %q: %w", p, err)
+		// tuple() is the partition name of an unpartitioned table; its storage
+		// key uses the partition ID ("all"), so it is safe to accept here.
+		if p != "tuple()" {
+			if err := ValidateIdentifier(p); err != nil {
+				return result, fmt.Errorf("invalid partition %q: %w", p, err)
+			}
 		}
 		target[p] = true
 	}
@@ -87,6 +91,11 @@ func (s *Service) DeletePartitionRecords(cluster, database, table string, partit
 	seenClean := map[string]bool{}
 
 	for _, r := range runs {
+		// Whole-table native backups form a chain (each depends on the previous
+		// one), so their partition lists are left alone.
+		if r.Native {
+			continue
+		}
 		kept := make([]model.BackupRunPartition, 0, len(r.Partitions))
 		removed := 0
 		var runClean []purgeCleanItem // 这条 run 贡献的远端清理项,仅台账删成功后才生效
@@ -99,7 +108,7 @@ func (s *Service) DeletePartitionRecords(cluster, database, table string, partit
 			// restore 条目同样删除(让该分区从列表彻底消失),但恢复是读 backup 数据
 			// 写回集群、没有独立的远端备份数据,故不进远端清理列表。
 			if r.Operation != model.OP_RESTORE {
-				runClean = append(runClean, purgeCleanItem{r.PolicyID, r.StoragePrefix, p.Partition})
+				runClean = append(runClean, purgeCleanItem{r.PolicyID, r.StoragePrefix, p.KeySegment()})
 			}
 		}
 		if removed == 0 {

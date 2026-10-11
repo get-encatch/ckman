@@ -148,3 +148,22 @@ func validateBandwidth(target string, mb int, lookupCluster func() (model.CKManC
 	}
 	return nil
 }
+
+// validateNativeOptions rejects options that don't apply to whole-table
+// native backups: dropping partitions after a backup would break the next
+// incremental, and file checksums are a per-partition feature.
+func validateNativeOptions(style string, clean, checksum bool, fullEvery int) error {
+	if fullEvery < 0 {
+		return fmt.Errorf("full_every must be >= 0, got %d", fullEvery)
+	}
+	if style != model.BACKUP_STYLE_NATIVE {
+		return nil
+	}
+	if clean {
+		return errors.New("native backups can't drop partitions after backup (clean); use a per-partition backup for archiving")
+	}
+	if checksum {
+		return errors.New("checksum is not supported for native backups")
+	}
+	return nil
+}

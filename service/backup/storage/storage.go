@@ -10,10 +10,10 @@ type Storage interface {
 	// BackupSQL：返回 BACKUP TABLE … TO …(…) 的尾部子句
 	// 调用方负责拼前面 BACKUP TABLE 部分。partition="all" 表示全表。
 	// key 是 BackupRun 在 storage 后端中的完整 key 前缀（由调用方用 JoinRunKey 生成）。
-	BackupSQL(database, table, partition, key string) string
+	BackupSQL(database, table, partition, partitionID, key string) string
 
 	// RestoreSQL：返回 RESTORE TABLE … FROM …(…) 的尾部子句
-	RestoreSQL(database, table, partition, key string) string
+	RestoreSQL(database, table, partition, partitionID, key string) string
 
 	// CleanPartition：按 keyPrefix 清空目标端残留对象 / 文件（keyPrefix 由 JoinRunKey 生成）。
 	// host 用于 Local 后端 ssh 到目标节点；S3 后端忽略。

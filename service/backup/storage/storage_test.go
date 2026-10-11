@@ -14,9 +14,11 @@ type fakeStorage struct {
 	checked  []string
 }
 
-func (f *fakeStorage) Init() error                                             { return nil }
-func (f *fakeStorage) BackupSQL(database, table, partition, key string) string { return "" }
-func (f *fakeStorage) RestoreSQL(database, table, partition, key string) string {
+func (f *fakeStorage) Init() error { return nil }
+func (f *fakeStorage) BackupSQL(database, table, partition, partitionID, key string) string {
+	return ""
+}
+func (f *fakeStorage) RestoreSQL(database, table, partition, partitionID, key string) string {
 	return ""
 }
 func (f *fakeStorage) CleanPartition(host, keyPrefix string) error {
@@ -39,8 +41,8 @@ func TestStorage_InterfaceCompiles(t *testing.T) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	_ = s.BackupSQL("d", "t", "p", "k")
-	_ = s.RestoreSQL("d", "t", "p", "k")
+	_ = s.BackupSQL("d", "t", "p", "", "k")
+	_ = s.RestoreSQL("d", "t", "p", "", "k")
 	_ = s.CleanPartition("h", "k")
 	_ = s.CheckPartition("h", "k", nil)
 }

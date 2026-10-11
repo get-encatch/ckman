@@ -29,6 +29,9 @@ func (s *Service) UpdatePolicy(p model.BackupPolicy) error {
 			return fmt.Errorf("invalid crontab: %w", err)
 		}
 	}
+	if err := validateNativeOptions(p.BackupStyle, p.Clean, p.Checksum, p.FullEvery); err != nil {
+		return err
+	}
 	if err := validateDailyRange(p.ScheduleType, p.BackupStyle, p.BackupType, p.StartDate, p.RangeStartDate, p.RangeEndDate, p.DaysBefore); err != nil {
 		return err
 	}
