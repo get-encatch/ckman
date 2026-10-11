@@ -175,6 +175,42 @@ export function stopNode(cluster: string, ip: string, ssh: Ssh = {}) {
   })
 }
 
+export function restartNode(cluster: string, ip: string, ssh: Ssh = {}) {
+  return api.put(`/api/v1/ck/node/restart/${enc(cluster)}`, undefined, {
+    ip,
+    ...ssh,
+  })
+}
+
+// MergeTree tables that aren't replicated: their rows live on one server.
+export type UnreplicatedTable = {
+  database: string
+  table: string
+  engine: string
+  hosts: { host: string; shard: number; rows: number }[]
+}
+
+export const unreplicatedTablesQuery = (cluster: string) =>
+  queryOptions({
+    queryKey: ["cluster", cluster, "unreplicated"],
+    queryFn: async () =>
+      (await api.get<UnreplicatedTable[] | null>(
+        `/api/v1/ck/table/unreplicated/${enc(cluster)}`
+      )) ?? [],
+  })
+
+// ATTACH TABLE ... AS REPLICATED on every server, no restart.
+export function convertToReplicated(
+  cluster: string,
+  database: string,
+  table: string
+) {
+  return api.post<{ hosts: string[] }>(
+    `/api/v1/ck/table/convert_replicated/${enc(cluster)}`,
+    { database, table }
+  )
+}
+
 export const nodeOverrideQuery = (cluster: string, ip: string) =>
   queryOptions({
     queryKey: ["cluster", cluster, "override", ip],

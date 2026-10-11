@@ -11,6 +11,7 @@ import { clusterQuery, clusterStatusQuery } from "@/api/queries"
 import { MetricChart } from "@/components/app/metric-chart"
 import { ErrorState, Stat } from "@/components/app/misc"
 import { PageBody, Section } from "@/components/app/page-header"
+import { UnreplicatedBanner } from "@/components/app/unreplicated-tables"
 import { NodeStatus, StatusPill, UsageBar } from "@/components/app/status"
 import { Button } from "@/components/ui/button"
 import {
@@ -68,6 +69,7 @@ function OverviewPage() {
 
   return (
     <PageBody>
+      <UnreplicatedBanner cluster={cluster} />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label="ClickHouse nodes up"

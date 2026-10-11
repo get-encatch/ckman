@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, Link, useRouteContext } from "@tanstack/react-router"
 import { CheckCircle2Icon, CircleIcon, XCircleIcon } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { isTaskActive, stopTask, taskListQuery, taskQuery } from "@/api/queries"
@@ -30,6 +30,16 @@ function TaskPage() {
   })
   const message = list.data?.find((t) => t.TaskId === taskId)?.Message
   const queryClient = useQueryClient()
+  const finishedCluster =
+    task.data && !isTaskActive(task.data.Status) ? task.data.ClusterName : null
+  // the cluster list (sidebar) and the cluster change when a task ends
+  useEffect(() => {
+    if (!finishedCluster) return
+    void queryClient.invalidateQueries({ queryKey: ["clusters"] })
+    void queryClient.invalidateQueries({
+      queryKey: ["cluster", finishedCluster],
+    })
+  }, [finishedCluster, queryClient])
   const [stopOpen, setStopOpen] = useState(false)
 
   if (task.error) {

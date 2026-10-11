@@ -31,6 +31,7 @@ import { CodeBlock, ErrorState } from "@/components/app/misc"
 import { PageBody } from "@/components/app/page-header"
 import { PartitionsSheet } from "@/components/app/partitions-sheet"
 import { StatusPill } from "@/components/app/status"
+import { UnreplicatedSection } from "@/components/app/unreplicated-tables"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -64,6 +65,8 @@ function TablesPage() {
   const { view = "tables" } = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const queryClient = useQueryClient()
+  const { session } = useRouteContext({ from: "/_app" })
+  const canWrite = session.policy !== "guest"
 
   return (
     <PageBody>
@@ -95,7 +98,12 @@ function TablesPage() {
       {view === "tables" && <TablesView cluster={cluster} />}
       {view === "views" && <ViewsView cluster={cluster} />}
       {view === "merges" && <MergesView cluster={cluster} />}
-      {view === "replication" && <ReplicationView cluster={cluster} />}
+      {view === "replication" && (
+        <>
+          <UnreplicatedSection cluster={cluster} canConvert={canWrite} />
+          <ReplicationView cluster={cluster} />
+        </>
+      )}
       {view === "pools" && <PoolsView cluster={cluster} />}
     </PageBody>
   )
