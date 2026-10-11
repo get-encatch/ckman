@@ -320,7 +320,11 @@ func GenerateCustomXML(filename string, conf *model.CKManClickHouseConfig, ext m
 	if conf.Secure {
 		mergo.Merge(&custom, openssl(conf))
 	}
-	if common.CompareClickHouseVersion(conf.Version, "22.4.x") >= 0 {
+	// merge_tree_metadata_cache was an experimental cache that ClickHouse later
+	// removed; recent releases refuse to start on unknown config elements
+	// (UNKNOWN_ELEMENT_IN_CONFIG), so only write it for the versions that had it.
+	if common.CompareClickHouseVersion(conf.Version, "22.4.x") >= 0 &&
+		common.CompareClickHouseVersion(conf.Version, "24.1.x") < 0 {
 		mergo.Merge(&custom, merge_tree_metadata_cache())
 	}
 	if common.CompareClickHouseVersion(conf.Version, "23.4.x") >= 0 {

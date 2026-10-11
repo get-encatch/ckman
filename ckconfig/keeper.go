@@ -44,8 +44,18 @@ func keeper_server(conf *model.CKManClickHouseConfig, ipv6Enable bool, idx int) 
 func coordination_settings(coordination model.Coordination) map[string]interface{} {
 	output := make(map[string]interface{})
 	mergo.Merge(&output, coordination.Expert)
-	output["operation_timeout_ms"] = coordination.OperationTimeoutMs
-	output["session_timeout_ms"] = coordination.SessionTimeoutMs
+	// 0 (field omitted, e.g. an API call without the UI's defaults) would make
+	// every Keeper session time out at once, so fall back to the UI defaults.
+	operationTimeoutMs := coordination.OperationTimeoutMs
+	if operationTimeoutMs <= 0 {
+		operationTimeoutMs = 10000
+	}
+	sessionTimeoutMs := coordination.SessionTimeoutMs
+	if sessionTimeoutMs <= 0 {
+		sessionTimeoutMs = 30000
+	}
+	output["operation_timeout_ms"] = operationTimeoutMs
+	output["session_timeout_ms"] = sessionTimeoutMs
 	if coordination.ForceSync {
 		output["force_sync"] = "true"
 	} else {
