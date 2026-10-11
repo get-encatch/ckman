@@ -3290,6 +3290,54 @@ func tlsConfEqual(a, b *model.TlsConf) bool {
 	return a.Cert == b.Cert && a.Key == b.Key && a.SelfSigned == b.SelfSigned
 }
 
+// configEqual compares two config values while treating nil and empty
+// maps/slices (and missing vs null fields) as the same. The settings form
+// echoes "[]" / "{}" for values the stored record holds as nil, and
+// reflect.DeepEqual on the raw structs then reports a change - restarting
+// ClickHouse and Keeper - when nothing was edited.
+func configEqual(a, b interface{}) bool {
+	return reflect.DeepEqual(normalizeConfigValue(a), normalizeConfigValue(b))
+}
+
+func normalizeConfigValue(v interface{}) interface{} {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	var out interface{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return v
+	}
+	return dropEmptyConfigValues(out)
+}
+
+func dropEmptyConfigValues(v interface{}) interface{} {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		m := make(map[string]interface{}, len(t))
+		for k, val := range t {
+			if n := dropEmptyConfigValues(val); n != nil {
+				m[k] = n
+			}
+		}
+		if len(m) == 0 {
+			return nil
+		}
+		return m
+	case []interface{}:
+		if len(t) == 0 {
+			return nil
+		}
+		out := make([]interface{}, len(t))
+		for i, val := range t {
+			out[i] = dropEmptyConfigValues(val)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 func mergeClickhouseConfig(conf *model.CKManClickHouseConfig, force bool) (restart bool, cc bool, kc bool, lerr error) {
 	cluster, err := repository.Ps.GetClusterbyName(conf.Cluster)
 	if err != nil {
@@ -3312,12 +3360,12 @@ func mergeClickhouseConfig(conf *model.CKManClickHouseConfig, force bool) (resta
 	if cluster.Secure != conf.Secure {
 		conf.NormalizeSecurePorts()
 	}
-	storageChanged := !reflect.DeepEqual(cluster.Storage, conf.Storage)
-	expertChanged := !reflect.DeepEqual(cluster.Expert, conf.Expert)
-	userconfChanged := !reflect.DeepEqual(cluster.UsersConf, conf.UsersConf)
+	storageChanged := !configEqual(cluster.Storage, conf.Storage)
+	expertChanged := !configEqual(cluster.Expert, conf.Expert)
+	userconfChanged := !configEqual(cluster.UsersConf, conf.UsersConf)
 	logicChaned := !reflect.DeepEqual(cluster.LogicCluster, conf.LogicCluster)
-	zkChanged := !reflect.DeepEqual(cluster.ZkNodes, conf.ZkNodes)
-	keeperChanged := !reflect.DeepEqual(cluster.KeeperConf, conf.KeeperConf)
+	zkChanged := !configEqual(cluster.ZkNodes, conf.ZkNodes)
+	keeperChanged := !configEqual(cluster.KeeperConf, conf.KeeperConf)
 	// NotAfter is populated on read (GetConfig) and echoed back verbatim by the
 	// frontend, but the copy loaded from the repository never carries it (see
 	// EncodePasswd/DecodePasswd in repository/helper.go, which always build a
