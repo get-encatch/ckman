@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import { errorMessage } from "@/api/client"
 import {
   backupPoliciesQuery,
+  describeMode,
   backupQueueQuery,
   deletePolicy,
   groupPolicies,
@@ -149,30 +150,9 @@ function BackupsPage() {
           </span>
         ),
       }),
-      col.accessor(
-        (t) => `${t.policies[0].backup_style} ${t.policies[0].backup_type}`,
-        {
-          id: "mode",
-          header: "Mode",
-          cell: (c) => {
-            const p = c.row.original.policies[0]
-            return p.backup_style === "full"
-              ? "Full"
-              : p.backup_type === "daily"
-                ? `Incremental, ${p.days_before}d back`
-                : "Incremental, by partition"
-          },
-        }
-      ),
-      col.accessor((t) => t.policies[0].target_type, {
-        id: "target",
-        header: "Target",
-        cell: (c) => {
-          const p = c.row.original.policies[0]
-          return p.target_type === "s3"
-            ? `S3 · ${p.s3?.Bucket}`
-            : `Local · ${p.local?.path}`
-        },
+      col.accessor((t) => describeMode(t.policies[0]), {
+        id: "mode",
+        header: "Mode",
       }),
       col.display({
         id: "last",

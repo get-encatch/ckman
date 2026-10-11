@@ -51,6 +51,50 @@ const CRON_PRESETS: Record<string, string> = {
   custom: "Custom…",
 }
 
+type Mode = "native" | "full" | "new-days" | "named"
+
+const MODES: {
+  value: Mode
+  label: string
+  help: string
+  schedulable: boolean
+}[] = [
+  {
+    value: "native",
+    label: "Whole table, incremental (recommended)",
+    help: "ClickHouse copies only data that changed since the last backup, including late rows in old days. Works for any table.",
+    schedulable: true,
+  },
+  {
+    value: "new-days",
+    label: "Day partitions not backed up yet",
+    help: "Copies each finished day once. Good for archiving; rows that arrive later for an already-copied day are not picked up.",
+    schedulable: true,
+  },
+  {
+    value: "full",
+    label: "Every partition, separately",
+    help: "A full copy, one backup per partition.",
+    schedulable: false,
+  },
+  {
+    value: "named",
+    label: "Named partitions",
+    help: "Only the partitions you list, if not backed up yet.",
+    schedulable: false,
+  },
+]
+
+const MODE_REQUEST: Record<
+  Mode,
+  Pick<BackupRequest, "backup_style" | "backup_type">
+> = {
+  native: { backup_style: "native", backup_type: "partition" },
+  full: { backup_style: "full", backup_type: "partition" },
+  "new-days": { backup_style: "incremental", backup_type: "daily" },
+  named: { backup_style: "incremental", backup_type: "partition" },
+}
+
 export function BackupFormDialog({
   cluster,
   open,
@@ -74,8 +118,8 @@ export function BackupFormDialog({
   const [name, setName] = useState("")
   const [database, setDatabase] = useState<string | null>(null)
   const [tables, setTables] = useState<Set<string>>(new Set())
-  const [style, setStyle] = useState<"full" | "incremental">("full")
-  const [incType, setIncType] = useState<"daily" | "partition">("daily")
+  const [mode, setMode] = useState<Mode>("native")
+  const [fullEvery, setFullEvery] = useState(7)
   const [daysBefore, setDaysBefore] = useState(1)
   const [partitions, setPartitions] = useState("")
   const [target, setTarget] = useState<"s3" | "local">("s3")
@@ -98,8 +142,10 @@ export function BackupFormDialog({
   })
   const databases = Object.keys(tree.data ?? {})
   const scheduled = schedule === "scheduled"
-  const effectiveStyle = scheduled ? "incremental" : style
-  const effectiveType = scheduled ? "daily" : incType
+  // a schedule can only use the modes that copy something new on each run
+  const effectiveMode: Mode =
+    scheduled && (mode === "full" || mode === "named") ? "native" : mode
+  const native = effectiveMode === "native"
   const selected = (summary.data ?? []).filter((t) => tables.has(t.name))
   const notDaily = selected
     .filter((t) => !t.daily_compatible)
@@ -110,7 +156,7 @@ export function BackupFormDialog({
     setName("")
     setDatabase(null)
     setTables(new Set())
-    setStyle("full")
+    setMode("native")
     setPartitions("")
     setClean(false)
     setError(null)
@@ -120,33 +166,18 @@ export function BackupFormDialog({
     const crontab = cronPreset === "custom" ? cron.trim() : cronPreset
     if (!database || tables.size === 0)
       return setError("Pick a database and at least one table.")
-    const unpartitioned = selected
-      .filter((t) => t.partition_format === "none")
-      .map((t) => t.name)
-    if (unpartitioned.length)
-      return setError(
-        `ckman backs up one partition at a time, so tables need a PARTITION BY key. Not partitioned: ${unpartitioned.join(", ")}.`
-      )
     if (scheduled) {
       const problem = cronProblem(crontab)
       if (problem) return setError(problem)
       if (!instances.data?.[0])
         return setError("No ckman instance available to run the schedule.")
     }
-    if (
-      effectiveStyle === "incremental" &&
-      effectiveType === "daily" &&
-      notDaily.length
-    )
+    if (effectiveMode === "new-days" && notDaily.length)
       return setError(
-        `Not partitioned by day: ${notDaily.join(", ")}. Use full or by-partition backups for these.`
+        `Not partitioned by day: ${notDaily.join(", ")}. Use a whole-table backup for these.`
       )
     const partList = partitions.split(/[\s,]+/).filter(Boolean)
-    if (
-      effectiveStyle === "incremental" &&
-      effectiveType === "partition" &&
-      partList.length === 0
-    )
+    if (effectiveMode === "named" && partList.length === 0)
       return setError("List the partitions to back up.")
     if (
       target === "s3" &&
@@ -163,10 +194,10 @@ export function BackupFormDialog({
       instance: scheduled ? instances.data?.[0] : undefined,
       database,
       tables: [...tables],
-      backup_style: effectiveStyle,
-      backup_type: effectiveType,
-      partitions: effectiveType === "partition" ? partList : undefined,
-      days_before: effectiveType === "daily" ? daysBefore : undefined,
+      ...MODE_REQUEST[effectiveMode],
+      partitions: effectiveMode === "named" ? partList : undefined,
+      days_before: effectiveMode === "new-days" ? daysBefore : undefined,
+      full_every: native ? fullEvery : undefined,
       target,
       s3:
         target === "s3"
@@ -174,9 +205,10 @@ export function BackupFormDialog({
           : undefined,
       local: target === "local" ? { path: localPath } : undefined,
       Compression: compression,
-      clean,
-      // checksums only make sense without compression
-      checksum: compression === "none",
+      // native backups chain on each other, so they can't drop partitions,
+      // and file checksums only exist for per-partition backups
+      clean: native ? false : clean,
+      checksum: !native && compression === "none",
     }
     setBusy(true)
     setError(null)
@@ -203,8 +235,8 @@ export function BackupFormDialog({
         <DialogHeader>
           <DialogTitle>New backup</DialogTitle>
           <DialogDescription>
-            Each node backs up its own share of the chosen tables, partition by
-            partition.
+            Each shard backs up its own share of the chosen tables, using
+            ClickHouse's BACKUP TABLE.
           </DialogDescription>
         </DialogHeader>
         <FieldGroup>
@@ -249,9 +281,8 @@ export function BackupFormDialog({
                   />
                 )}
                 <FieldDescription className="sm:col-span-2">
-                  Scheduled backups are incremental: each run copies day
-                  partitions that aren't backed up yet. Cron format has 6
-                  fields, seconds first; runs must be at least an hour apart.
+                  Cron format has 6 fields, seconds first; runs must be at least
+                  an hour apart.
                 </FieldDescription>
               </div>
             )}
@@ -333,39 +364,53 @@ export function BackupFormDialog({
             </Field>
           )}
 
-          {!scheduled && (
-            <FieldSet>
-              <FieldLegend variant="label">What to copy</FieldLegend>
-              <RadioGroup
-                value={style}
-                onValueChange={(v) => setStyle(v as "full" | "incremental")}
-                className="flex gap-6"
-              >
-                <Label className="flex items-center gap-2 font-normal">
-                  <RadioGroupItem value="full" /> Everything
-                </Label>
-                <Label className="flex items-center gap-2 font-normal">
-                  <RadioGroupItem value="incremental" /> Only partitions not
-                  backed up yet
-                </Label>
-              </RadioGroup>
-              {style === "incremental" && (
-                <RadioGroup
-                  value={incType}
-                  onValueChange={(v) => setIncType(v as "daily" | "partition")}
-                  className="flex gap-6"
+          <FieldSet>
+            <FieldLegend variant="label">What to copy</FieldLegend>
+            <RadioGroup
+              value={effectiveMode}
+              onValueChange={(v) => setMode(v as Mode)}
+              className="gap-3"
+            >
+              {MODES.filter((m) => !scheduled || m.schedulable).map((m) => (
+                <Label
+                  key={m.value}
+                  className="flex items-start gap-2 font-normal"
                 >
-                  <Label className="flex items-center gap-2 font-normal">
-                    <RadioGroupItem value="daily" /> Day partitions
-                  </Label>
-                  <Label className="flex items-center gap-2 font-normal">
-                    <RadioGroupItem value="partition" /> Named partitions
-                  </Label>
-                </RadioGroup>
-              )}
-            </FieldSet>
+                  <RadioGroupItem value={m.value} className="mt-0.5" />
+                  <span>
+                    {m.label}
+                    <span className="block text-xs text-muted-foreground">
+                      {m.help}
+                    </span>
+                  </span>
+                </Label>
+              ))}
+            </RadioGroup>
+          </FieldSet>
+          {native && (
+            <Field orientation="horizontal">
+              <FieldLabel htmlFor="bk-full-every">
+                Start a new full backup every
+              </FieldLabel>
+              <Input
+                id="bk-full-every"
+                type="number"
+                min={1}
+                max={60}
+                value={fullEvery}
+                onChange={(e) =>
+                  setFullEvery(
+                    Math.min(60, Math.max(1, Number(e.target.value) || 1))
+                  )
+                }
+                className="w-20"
+              />
+              <span className="text-sm text-muted-foreground">
+                runs (each backup needs the earlier ones of its chain)
+              </span>
+            </Field>
           )}
-          {effectiveStyle === "incremental" && effectiveType === "daily" && (
+          {effectiveMode === "new-days" && (
             <Field orientation="horizontal">
               <FieldLabel htmlFor="bk-days">Skip the newest</FieldLabel>
               <Input
@@ -384,19 +429,18 @@ export function BackupFormDialog({
               </span>
             </Field>
           )}
-          {effectiveStyle === "incremental" &&
-            effectiveType === "partition" && (
-              <Field>
-                <FieldLabel htmlFor="bk-parts">Partitions</FieldLabel>
-                <Input
-                  id="bk-parts"
-                  value={partitions}
-                  onChange={(e) => setPartitions(e.target.value)}
-                  placeholder="20261001, 20261002"
-                  className="font-mono"
-                />
-              </Field>
-            )}
+          {effectiveMode === "named" && (
+            <Field>
+              <FieldLabel htmlFor="bk-parts">Partitions</FieldLabel>
+              <Input
+                id="bk-parts"
+                value={partitions}
+                onChange={(e) => setPartitions(e.target.value)}
+                placeholder="20261001, 20261002"
+                className="font-mono"
+              />
+            </Field>
+          )}
 
           <FieldSet>
             <FieldLegend variant="label">Where</FieldLegend>
@@ -488,19 +532,21 @@ export function BackupFormDialog({
                 </SelectContent>
               </Select>
             </Field>
-            <Label className="flex items-start gap-2 self-end pb-2 font-normal">
-              <Checkbox
-                checked={clean}
-                onCheckedChange={(v) => setClean(v === true)}
-                className="mt-0.5"
-              />
-              <span>
-                Drop partitions from ClickHouse after a successful backup
-                <span className="block text-xs text-destructive">
-                  Frees disk space; data then only lives in the backup.
+            {!native && (
+              <Label className="flex items-start gap-2 self-end pb-2 font-normal">
+                <Checkbox
+                  checked={clean}
+                  onCheckedChange={(v) => setClean(v === true)}
+                  className="mt-0.5"
+                />
+                <span>
+                  Drop partitions from ClickHouse after a successful backup
+                  <span className="block text-xs text-destructive">
+                    Frees disk space; data then only lives in the backup.
+                  </span>
                 </span>
-              </span>
-            </Label>
+              </Label>
+            )}
           </div>
           {error && <FieldError>{error}</FieldError>}
         </FieldGroup>

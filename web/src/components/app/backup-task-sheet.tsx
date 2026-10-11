@@ -5,6 +5,8 @@ import { toast } from "sonner"
 import { errorMessage } from "@/api/client"
 import {
   backupRunQuery,
+  describeMode,
+  partitionLabel,
   isZeroTime,
   nextRunQuery,
   policyRunsQuery,
@@ -95,7 +97,12 @@ export function BackupTaskSheet({
       }),
       runCol.accessor("operation", {
         header: "Type",
-        cell: (c) => (c.getValue() === "restore" ? "Restore" : "Backup"),
+        cell: (c) => {
+          const r = c.row.original
+          if (r.operation === "restore") return "Restore"
+          if (r.native) return r.base_run_id ? "Incremental" : "Full"
+          return "Backup"
+        },
       }),
       runCol.accessor("status", {
         header: "Status",
@@ -164,14 +171,7 @@ export function BackupTaskSheet({
                       string,
                     ][])
                   : []),
-                [
-                  "Mode",
-                  first.backup_style === "full"
-                    ? "Full: every partition, every run"
-                    : first.backup_type === "daily"
-                      ? `Incremental: day partitions up to ${first.days_before} day(s) ago that aren't backed up yet`
-                      : `Incremental: partitions ${(first.partitions ?? []).join(", ")}`,
-                ],
+                ["Mode", describeMode(first)],
                 [
                   "Target",
                   first.target_type === "s3"
@@ -255,7 +255,7 @@ function RunDialog({
         <DialogHeader>
           <DialogTitle>
             {r
-              ? `${r.operation === "restore" ? "Restore" : "Backup"} of ${r.database}.${r.table}`
+              ? `${r.operation === "restore" ? "Restore" : r.native ? (r.base_run_id ? "Incremental backup" : "Full backup") : "Backup"} of ${r.database}.${r.table}`
               : "Run"}
           </DialogTitle>
           <DialogDescription>
@@ -318,7 +318,9 @@ function RunDialog({
                         />
                       </td>
                     )}
-                    <td className="px-3 py-1.5 font-mono">{p.partition}</td>
+                    <td className="px-3 py-1.5 font-mono">
+                      {partitionLabel(p.partition)}
+                    </td>
                     <td className="px-3 py-1.5">{p.status}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">
                       {formatNumber(p.rows)}
@@ -348,8 +350,9 @@ function RunDialog({
         {restorable && canWrite && (
           <DialogFooter className="items-center sm:justify-between">
             <p className="text-xs text-muted-foreground">
-              Restoring adds the rows back into the table. If a partition still
-              exists, its rows get duplicated: drop it first.
+              {r.native
+                ? "Restores the chosen partitions from this whole-table backup (ClickHouse reads the earlier backups of its chain too). Rows are added: drop a partition first if it still holds data."
+                : "Restoring adds the rows back into the table. If a partition still exists, its rows get duplicated: drop it first."}
             </p>
             <Button
               disabled={selected.size === 0 || restoring}

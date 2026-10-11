@@ -28,8 +28,9 @@ export type BackupPolicy = {
   schedule_type: "immediate" | "scheduled"
   crontab: string
   instance: string
-  backup_style: "full" | "incremental"
+  backup_style: BackupStyle
   backup_type: "partition" | "daily"
+  full_every: number
   days_before: number
   start_date: string
   range_start_date: string
@@ -47,6 +48,9 @@ export type BackupPolicy = {
   update_time: string
 }
 
+// "native": whole-table BACKUP per shard, incremental via base_backup
+export type BackupStyle = "full" | "incremental" | "native"
+
 export type RunStatus =
   "queued" | "running" | "success" | "failed" | "skipped" | "interrupted"
 
@@ -57,6 +61,9 @@ export type BackupRun = {
   database: string
   table: string
   operation: "backup" | "restore"
+  native?: boolean
+  base_run_id?: string // native backup: built on this run; empty = full
+  source_run_id?: string
   trigger_type: string
   instance: string
   status: RunStatus
@@ -64,6 +71,7 @@ export type BackupRun = {
   partitions:
     | {
         partition: string
+        partition_id?: string
         status: string
         size: number
         rows: number
@@ -194,8 +202,9 @@ export type BackupRequest = {
   instance?: string
   database: string
   tables: string[]
-  backup_style: "full" | "incremental"
+  backup_style: BackupStyle
   backup_type: "partition" | "daily"
+  full_every?: number
   partitions?: string[]
   days_before?: number
   start_date?: string
@@ -353,3 +362,17 @@ export function rebalancePlan(cluster: string, body: RebalanceRequest) {
 export function rebalanceExecute(cluster: string, body: RebalanceRequest) {
   return api.put<string | null>(`/api/v1/ck/rebalance/${enc(cluster)}`, body)
 }
+
+// Short description of what a policy copies.
+export function describeMode(p: BackupPolicy) {
+  if (p.backup_style === "native")
+    return `Whole table, incremental (full every ${p.full_every || 7})`
+  if (p.backup_style === "full") return "Every partition"
+  if (p.backup_type === "daily")
+    return `New day partitions, ${p.days_before}d back`
+  return "Named partitions"
+}
+
+// The partition of an unpartitioned table is called tuple().
+export const partitionLabel = (name: string) =>
+  name === "tuple()" ? "whole table" : name
