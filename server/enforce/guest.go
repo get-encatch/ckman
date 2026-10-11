@@ -25,6 +25,7 @@ func GuestPolicies() []Policy {
 		{"/ck/ping/*", POST},
 		{"/ck/config/*", GET},
 		{"/zk/status/*", GET},
+		{"/zk/host_stats/*", GET},
 		{"/zk/replicated_table/*", GET},
 		{"/package", GET},
 		{"/metric/query/*", GET},

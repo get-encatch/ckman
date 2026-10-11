@@ -67,7 +67,8 @@ export type NodeInfo = {
   status: "green" | "red"
   shardNumber: number
   replicaNumber: number
-  disk: string // "used / total"
+  disk: string // "used / total" of the whole volume (shared disks show the same)
+  data?: string // ClickHouse's own parts on this node
   uptime: string
   cpu: string
   memory: string

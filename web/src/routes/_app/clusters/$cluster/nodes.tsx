@@ -165,8 +165,15 @@ function NodesPage() {
           />
         ),
       }),
+      col.accessor("data", {
+        header: "Data",
+        enableSorting: false,
+        cell: (c) => (
+          <span className="tabular-nums">{c.getValue() ?? "—"}</span>
+        ),
+      }),
       col.accessor("disk", {
-        header: "Disk",
+        header: "Disk (volume)",
         enableSorting: false,
         cell: (c) => (
           <UsageBar
@@ -266,7 +273,7 @@ function NodesPage() {
     <PageBody>
       <Section
         title="Nodes"
-        description="ClickHouse servers in this cluster, grouped as shards and replicas."
+        description="ClickHouse servers in this cluster, grouped as shards and replicas. Data is what ClickHouse stores on each node; Disk is the whole volume, so servers sharing a disk show the same figure."
         actions={
           canManage && (
             <Button size="sm" onClick={() => setAddOpen(true)}>

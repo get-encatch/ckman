@@ -3,8 +3,10 @@ import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, Link } from "@tanstack/react-router"
 
 import {
+  keeperHostStatsQuery,
   keeperStatusQuery,
   METRIC_GROUPS,
+  type KeeperHostStats,
   type MetricGroup,
 } from "@/api/observability"
 import { clusterQuery, clusterStatusQuery } from "@/api/queries"
@@ -49,6 +51,11 @@ function OverviewPage() {
   const config = useQuery(clusterQuery(cluster))
   const status = useQuery(clusterStatusQuery(cluster))
   const keeper = useQuery(keeperStatusQuery(cluster))
+  const keeperHosts = useQuery({
+    ...keeperHostStatsQuery(cluster),
+    enabled: config.data?.keeper === "clickhouse-keeper",
+  })
+  const hostStats = new Map((keeperHosts.data ?? []).map((h) => [h.host, h]))
   const [group, setGroup] = useState<MetricGroup>("queries")
   const [range, setRange] = useState<keyof typeof RANGES>("1h")
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
@@ -155,7 +162,15 @@ function OverviewPage() {
                           </span>
                         </div>
                         <NodeStatus status={n.status} />
-                        <div className="ml-auto flex gap-4">
+                        <div className="ml-auto flex items-end gap-4">
+                          {n.data && (
+                            <span
+                              className="text-xs text-muted-foreground tabular-nums"
+                              title="ClickHouse data on this node"
+                            >
+                              Data {n.data}
+                            </span>
+                          )}
                           <UsageBar
                             fraction={usedFraction(n.memory)}
                             label={`Mem ${n.memory}`}
@@ -163,6 +178,7 @@ function OverviewPage() {
                           <UsageBar
                             fraction={usedFraction(n.disk)}
                             label={`Disk ${n.disk}`}
+                            title="Whole volume: servers sharing a disk show the same figure"
                           />
                         </div>
                       </li>
@@ -176,7 +192,7 @@ function OverviewPage() {
 
       <Section
         title="Keeper"
-        description="Health of the coordination nodes that keep replicas in sync."
+        description="Health of the coordination nodes that keep replicas in sync. CPU, memory and disk come from each Keeper server over SSH; disk is the whole volume holding Keeper's data."
       >
         {keeper.error ? (
           <ErrorState error={keeper.error} />
@@ -192,6 +208,10 @@ function OverviewPage() {
                   <TableHead className="text-right">Znodes</TableHead>
                   <TableHead className="text-right">Data size</TableHead>
                   <TableHead className="text-right">Outstanding</TableHead>
+                  <TableHead className="text-right">CPU load</TableHead>
+                  <TableHead>Memory</TableHead>
+                  <TableHead>Disk (volume)</TableHead>
+                  <TableHead className="text-right">Keeper memory</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -220,11 +240,12 @@ function OverviewPage() {
                     <TableCell className="text-right tabular-nums">
                       {k.outstanding_requests}
                     </TableCell>
+                    <KeeperHostCells stats={hostStats.get(k.host)} />
                   </TableRow>
                 ))}
                 {keeper.isPending && (
                   <TableRow>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={11}>
                       <Skeleton className="h-4 w-full" />
                     </TableCell>
                   </TableRow>
@@ -295,5 +316,52 @@ function OverviewPage() {
         </div>
       </Section>
     </PageBody>
+  )
+}
+
+function KeeperHostCells({ stats }: { stats: KeeperHostStats | undefined }) {
+  if (!stats)
+    return (
+      <TableCell colSpan={4} className="text-muted-foreground">
+        —
+      </TableCell>
+    )
+  if (stats.error)
+    return (
+      <TableCell
+        colSpan={4}
+        className="text-muted-foreground"
+        title={stats.error}
+      >
+        No SSH access
+      </TableCell>
+    )
+  return (
+    <>
+      <TableCell
+        className="text-right tabular-nums"
+        title="1-minute load average / cores"
+      >
+        {stats.load1.toFixed(2)} / {stats.cores}
+      </TableCell>
+      <TableCell>
+        <UsageBar
+          fraction={stats.mem_total ? stats.mem_used / stats.mem_total : null}
+          label={`${formatBytes(stats.mem_used)} / ${formatBytes(stats.mem_total)}`}
+        />
+      </TableCell>
+      <TableCell>
+        <UsageBar
+          fraction={
+            stats.disk_total ? stats.disk_used / stats.disk_total : null
+          }
+          label={`${formatBytes(stats.disk_used)} / ${formatBytes(stats.disk_total)}`}
+          title={`Keeper's own data: ${formatBytes(stats.data_bytes)}`}
+        />
+      </TableCell>
+      <TableCell className="text-right tabular-nums">
+        {stats.proc_rss ? formatBytes(stats.proc_rss) : "—"}
+      </TableCell>
+    </>
   )
 }
