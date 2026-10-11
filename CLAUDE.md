@@ -1,3 +1,8 @@
+> **get-encatch fork:** this repo is the get-encatch fork of housepower/ckman.
+> The Vue `frontend/` submodule described below was removed; the UI is the
+> React app in `web/`. Read `FORK.md` first (branches, upstream sync,
+> deploying, UI and API notes). The submodule workflow below does not apply here.
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
