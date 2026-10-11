@@ -30,6 +30,7 @@ import { Route as AppClustersClusterQueryRouteImport } from './routes/_app/clust
 import { Route as AppClustersClusterRebalanceRouteImport } from './routes/_app/clusters/$cluster/rebalance'
 import { Route as AppClustersClusterSessionsRouteImport } from './routes/_app/clusters/$cluster/sessions'
 import { Route as AppClustersClusterSettingsRouteImport } from './routes/_app/clusters/$cluster/settings'
+import { Route as AppClustersClusterStandbyRouteImport } from './routes/_app/clusters/$cluster/standby'
 import { Route as AppClustersClusterTablesRouteImport } from './routes/_app/clusters/$cluster/tables'
 
 const AppRoute = AppRouteImport.update({
@@ -140,6 +141,12 @@ const AppClustersClusterSettingsRoute =
     path: '/settings',
     getParentRoute: () => AppClustersClusterRoute,
   } as any)
+const AppClustersClusterStandbyRoute =
+  AppClustersClusterStandbyRouteImport.update({
+    id: '/standby',
+    path: '/standby',
+    getParentRoute: () => AppClustersClusterRoute,
+  } as any)
 const AppClustersClusterTablesRoute =
   AppClustersClusterTablesRouteImport.update({
     id: '/tables',
@@ -167,6 +174,7 @@ export interface FileRoutesByFullPath {
   '/clusters/$cluster/rebalance': typeof AppClustersClusterRebalanceRoute
   '/clusters/$cluster/sessions': typeof AppClustersClusterSessionsRoute
   '/clusters/$cluster/settings': typeof AppClustersClusterSettingsRoute
+  '/clusters/$cluster/standby': typeof AppClustersClusterStandbyRoute
   '/clusters/$cluster/tables': typeof AppClustersClusterTablesRoute
   '/clusters/$cluster/': typeof AppClustersClusterIndexRoute
 }
@@ -189,6 +197,7 @@ export interface FileRoutesByTo {
   '/clusters/$cluster/rebalance': typeof AppClustersClusterRebalanceRoute
   '/clusters/$cluster/sessions': typeof AppClustersClusterSessionsRoute
   '/clusters/$cluster/settings': typeof AppClustersClusterSettingsRoute
+  '/clusters/$cluster/standby': typeof AppClustersClusterStandbyRoute
   '/clusters/$cluster/tables': typeof AppClustersClusterTablesRoute
   '/clusters/$cluster': typeof AppClustersClusterIndexRoute
 }
@@ -214,6 +223,7 @@ export interface FileRoutesById {
   '/_app/clusters/$cluster/rebalance': typeof AppClustersClusterRebalanceRoute
   '/_app/clusters/$cluster/sessions': typeof AppClustersClusterSessionsRoute
   '/_app/clusters/$cluster/settings': typeof AppClustersClusterSettingsRoute
+  '/_app/clusters/$cluster/standby': typeof AppClustersClusterStandbyRoute
   '/_app/clusters/$cluster/tables': typeof AppClustersClusterTablesRoute
   '/_app/clusters/$cluster/': typeof AppClustersClusterIndexRoute
 }
@@ -239,6 +249,7 @@ export interface FileRouteTypes {
     | '/clusters/$cluster/rebalance'
     | '/clusters/$cluster/sessions'
     | '/clusters/$cluster/settings'
+    | '/clusters/$cluster/standby'
     | '/clusters/$cluster/tables'
     | '/clusters/$cluster/'
   fileRoutesByTo: FileRoutesByTo
@@ -261,6 +272,7 @@ export interface FileRouteTypes {
     | '/clusters/$cluster/rebalance'
     | '/clusters/$cluster/sessions'
     | '/clusters/$cluster/settings'
+    | '/clusters/$cluster/standby'
     | '/clusters/$cluster/tables'
     | '/clusters/$cluster'
   id:
@@ -285,6 +297,7 @@ export interface FileRouteTypes {
     | '/_app/clusters/$cluster/rebalance'
     | '/_app/clusters/$cluster/sessions'
     | '/_app/clusters/$cluster/settings'
+    | '/_app/clusters/$cluster/standby'
     | '/_app/clusters/$cluster/tables'
     | '/_app/clusters/$cluster/'
   fileRoutesById: FileRoutesById
@@ -443,6 +456,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppClustersClusterSettingsRouteImport
       parentRoute: typeof AppClustersClusterRoute
     }
+    '/_app/clusters/$cluster/standby': {
+      id: '/_app/clusters/$cluster/standby'
+      path: '/standby'
+      fullPath: '/clusters/$cluster/standby'
+      preLoaderRoute: typeof AppClustersClusterStandbyRouteImport
+      parentRoute: typeof AppClustersClusterRoute
+    }
     '/_app/clusters/$cluster/tables': {
       id: '/_app/clusters/$cluster/tables'
       path: '/tables'
@@ -460,6 +480,7 @@ interface AppClustersClusterRouteChildren {
   AppClustersClusterRebalanceRoute: typeof AppClustersClusterRebalanceRoute
   AppClustersClusterSessionsRoute: typeof AppClustersClusterSessionsRoute
   AppClustersClusterSettingsRoute: typeof AppClustersClusterSettingsRoute
+  AppClustersClusterStandbyRoute: typeof AppClustersClusterStandbyRoute
   AppClustersClusterTablesRoute: typeof AppClustersClusterTablesRoute
   AppClustersClusterIndexRoute: typeof AppClustersClusterIndexRoute
 }
@@ -471,6 +492,7 @@ const AppClustersClusterRouteChildren: AppClustersClusterRouteChildren = {
   AppClustersClusterRebalanceRoute: AppClustersClusterRebalanceRoute,
   AppClustersClusterSessionsRoute: AppClustersClusterSessionsRoute,
   AppClustersClusterSettingsRoute: AppClustersClusterSettingsRoute,
+  AppClustersClusterStandbyRoute: AppClustersClusterStandbyRoute,
   AppClustersClusterTablesRoute: AppClustersClusterTablesRoute,
   AppClustersClusterIndexRoute: AppClustersClusterIndexRoute,
 }

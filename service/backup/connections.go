@@ -35,8 +35,21 @@ func ValidateBucketName(name string) error {
 
 func decodeConnection(c model.StorageConnection) model.StorageConnection {
 	c.S3.SecretAccessKey = common.AesDecryptECB(c.S3.SecretAccessKey)
+	c.Azure.AccountKey = common.AesDecryptECB(c.Azure.AccountKey)
 	return c
 }
+
+var containerNameRe = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9]|-[a-z0-9]){2,62}$`)
+
+// ValidateContainerName applies Azure's container naming rules.
+func ValidateContainerName(name string) error {
+	if len(name) > 63 || !containerNameRe.MatchString(name) {
+		return fmt.Errorf("container name %q: use 3-63 lowercase letters, digits or single hyphens, starting and ending with a letter or digit", name)
+	}
+	return nil
+}
+
+func isAzure(c model.StorageConnection) bool { return c.Type == model.STORAGE_CONN_AZURE }
 
 // ListConnections returns all saved connections with their secrets decrypted.
 func ListConnections() ([]model.StorageConnection, error) {
@@ -68,6 +81,9 @@ func SaveConnection(c model.StorageConnection) (model.StorageConnection, error) 
 	c.Name = strings.TrimSpace(c.Name)
 	if c.Name == "" {
 		return c, errors.New("name is required")
+	}
+	if isAzure(c) {
+		return saveAzureConnection(c)
 	}
 	c.Type = model.STORAGE_CONN_S3
 	c.S3.Endpoint = strings.TrimRight(strings.TrimSpace(c.S3.Endpoint), "/")
@@ -118,6 +134,60 @@ func SaveConnection(c model.StorageConnection) (model.StorageConnection, error) 
 	return c, err
 }
 
+func saveAzureConnection(c model.StorageConnection) (model.StorageConnection, error) {
+	c.S3 = model.TargetS3{}
+	c.Azure.Endpoint = strings.TrimRight(strings.TrimSpace(c.Azure.Endpoint), "/")
+	c.Azure.AccountName = strings.TrimSpace(c.Azure.AccountName)
+	c.Azure.Container = ""
+	if !strings.HasPrefix(c.Azure.Endpoint, "http://") && !strings.HasPrefix(c.Azure.Endpoint, "https://") {
+		return c, errors.New("endpoint must start with http:// or https://")
+	}
+	all, err := ListConnections()
+	if err != nil {
+		return c, err
+	}
+	for _, other := range all {
+		if other.ConnectionID != c.ConnectionID && strings.EqualFold(other.Name, c.Name) {
+			return c, fmt.Errorf("a connection named %q already exists", c.Name)
+		}
+	}
+	if c.ConnectionID != "" {
+		old, gerr := GetConnection(c.ConnectionID)
+		if gerr != nil {
+			return c, fmt.Errorf("connection %s: %w", c.ConnectionID, gerr)
+		}
+		if c.Azure.AccountKey == "" {
+			c.Azure.AccountKey = old.Azure.AccountKey
+		}
+		c.CreateTime = old.CreateTime
+	}
+	if c.Azure.AccountName == "" || c.Azure.AccountKey == "" {
+		return c, errors.New("account name and key are required")
+	}
+	if _, err := ListAzureContainers(c.Azure); err != nil {
+		return c, fmt.Errorf("can't connect with these settings: %w", err)
+	}
+	stored := c
+	stored.Azure.AccountKey = common.AesEncryptECB(c.Azure.AccountKey)
+	if c.ConnectionID == "" {
+		c.ConnectionID = uuid.New()
+		stored.ConnectionID = c.ConnectionID
+		err = repository.Ps.CreateStorageConnection(stored)
+	} else {
+		err = repository.Ps.UpdateStorageConnection(stored)
+	}
+	return c, err
+}
+
+// ListAzureContainers lists an account's containers (also a connection test).
+func ListAzureContainers(cfg model.TargetAzure) ([]string, error) {
+	client, err := storage.NewAzureClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return client.ListContainers()
+}
+
 // DeleteConnection removes a connection that no backup policy uses.
 func DeleteConnection(id string) error {
 	policies, err := repository.Ps.GetAllBackupPolicies()
@@ -156,17 +226,30 @@ func ConnectionBuckets(id string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if isAzure(c) {
+		return ListAzureContainers(c.Azure)
+	}
 	return ListS3Buckets(c.S3)
 }
 
 // CreateConnectionBucket creates a bucket through a saved connection; an
 // existing bucket owned by the same credentials is fine.
 func CreateConnectionBucket(id, bucket string) error {
-	if err := ValidateBucketName(bucket); err != nil {
-		return err
-	}
 	c, err := lookupConnection(id)
 	if err != nil {
+		return err
+	}
+	if isAzure(c) {
+		if err := ValidateContainerName(bucket); err != nil {
+			return err
+		}
+		client, err := storage.NewAzureClient(c.Azure)
+		if err != nil {
+			return err
+		}
+		return client.CreateContainer(bucket)
+	}
+	if err := ValidateBucketName(bucket); err != nil {
 		return err
 	}
 	cfg := c.S3
@@ -190,6 +273,15 @@ func ResolvePolicyTarget(p model.BackupPolicy) (model.BackupPolicy, error) {
 		return p, fmt.Errorf("storage connection %s: %w", p.ConnectionID, err)
 	}
 	bucket := p.S3.Bucket
+	if isAzure(c) {
+		// policies store an Azure connection like S3 (connection + bucket);
+		// at run time they write to the connection's account, bucket = container
+		az := c.Azure
+		az.Container = bucket
+		p.TargetType = model.BACKUP_AZURE
+		p.Azure = &az
+		return p, nil
+	}
 	p.S3 = c.S3
 	p.S3.Bucket = bucket
 	return p, nil
@@ -200,9 +292,6 @@ func ResolvePolicyTarget(p model.BackupPolicy) (model.BackupPolicy, error) {
 // S3 settings to store on the policy: only the bucket, no credentials.
 func prepareConnectionTarget(connectionID string, s3 model.TargetS3) (model.TargetS3, error) {
 	bucket := strings.TrimSpace(s3.Bucket)
-	if err := ValidateBucketName(bucket); err != nil {
-		return s3, err
-	}
 	if err := CreateConnectionBucket(connectionID, bucket); err != nil {
 		return s3, fmt.Errorf("bucket %s: %w", bucket, err)
 	}

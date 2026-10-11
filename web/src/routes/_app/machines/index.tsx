@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, Link, useRouteContext } from "@tanstack/react-router"
-import { MoreHorizontalIcon, PlusIcon } from "lucide-react"
+import { MoreHorizontalIcon, PlusIcon, SettingsIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { errorMessage } from "@/api/client"
@@ -14,6 +14,7 @@ import {
   type MachineStats,
 } from "@/api/fleet"
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
+import { FleetSettingsDialog } from "@/components/app/fleet-settings-dialog"
 import { columnHelper, DataTable } from "@/components/app/data-table"
 import { CapacityBar, formatCores } from "@/components/app/fleet-usage"
 import { MachineDialog } from "@/components/app/machine-dialog"
@@ -46,6 +47,7 @@ function MachinesPage() {
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState<Machine | "new" | null>(null)
   const [removing, setRemoving] = useState<Machine | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const rows = useMemo<Row[]>(() => {
     const byId = new Map((stats.data ?? []).map((s) => [s.machine_id, s]))
@@ -219,9 +221,14 @@ function MachinesPage() {
         description="Servers that run ClickHouse and Keeper as containers. Bars show what's used, what containers reserve (their limits) and the total."
         actions={
           isAdmin && (
-            <Button onClick={() => setEditing("new")}>
-              <PlusIcon /> Add machine
-            </Button>
+            <>
+              <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+                <SettingsIcon /> Fleet settings
+              </Button>
+              <Button onClick={() => setEditing("new")}>
+                <PlusIcon /> Add machine
+              </Button>
+            </>
           )
         }
       />
@@ -238,6 +245,7 @@ function MachinesPage() {
           getRowId={(m) => m.id}
         />
       </PageBody>
+      <FleetSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <MachineDialog
         machine={editing}
         zones={zones}
