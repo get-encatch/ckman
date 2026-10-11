@@ -20,6 +20,15 @@ export default defineConfig({
       "@": resolve(import.meta.dirname, "./src"),
     },
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        // Go's //go:embed skips files starting with "_" (TanStack names route
+        // chunks after files like _app.tsx), so strip leading underscores.
+        chunkFileNames: (chunk) => `assets/${chunk.name.replace(/^_+/, "")}-[hash].js`,
+      },
+    },
+  },
   server: {
     proxy: {
       "/api": ckman,
