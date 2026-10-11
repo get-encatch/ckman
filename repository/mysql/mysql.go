@@ -83,6 +83,7 @@ func (mp *MysqlPersistent) Init(config interface{}) error {
 		&TblBackupRun{},    // 新增
 		&TblUser{},         // Phase 1 用户管理
 		&TblStorageConnection{},
+		&TblFleetObject{},
 	}); err != nil {
 		return errors.Wrap(err, "")
 	}

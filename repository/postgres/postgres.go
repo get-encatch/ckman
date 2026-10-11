@@ -107,6 +107,14 @@ func (mp *PostgresPersistent) Init(config interface{}) error {
 
 	// 新增 backup_policy / backup_run 表（postgres automigrate 有 bug，手动建）
 	backupTblSQLs := []string{
+		`CREATE TABLE IF NOT EXISTS tbl_fleet_object (
+			obj_kind    VARCHAR(32)  NOT NULL,
+			obj_id      VARCHAR(128) NOT NULL,
+			obj_name    VARCHAR(128),
+			obj_body    TEXT,
+			update_time VARCHAR(32),
+			PRIMARY KEY (obj_kind, obj_id)
+		)`,
 		`CREATE TABLE IF NOT EXISTS tbl_storage_connection (
 			connection_id VARCHAR(64) PRIMARY KEY,
 			conn_name     VARCHAR(128) NOT NULL,
