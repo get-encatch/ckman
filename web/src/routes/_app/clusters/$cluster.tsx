@@ -57,6 +57,7 @@ const TABS = [
   { to: "/clusters/$cluster/query", label: "Query" },
   { to: "/clusters/$cluster/backups", label: "Backups" },
   { to: "/clusters/$cluster/rebalance", label: "Rebalance" },
+  { to: "/clusters/$cluster/standby", label: "Standby" },
   { to: "/clusters/$cluster/settings", label: "Settings", deployOnly: true },
 ] as const
 

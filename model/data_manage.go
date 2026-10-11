@@ -27,6 +27,7 @@ const (
 
 	BACKUP_LOCAL = "local"
 	BACKUP_S3    = "s3"
+	BACKUP_AZURE = "azure" // resolved from an Azure storage connection, never stored on a policy
 
 	BACKUP_PARTITION_STATUS_WAITING = "waiting"
 	BACKUP_PARTITION_STATUS_RUNNING = "running"
@@ -163,47 +164,48 @@ const (
 	TRIGGER_MIGRATED         = "migrated"
 
 	// Run skip / interrupt reasons
-	REASON_OVERLAP      = "overlap"
-	REASON_QUEUE_FULL   = "queue_full"
-	REASON_SHUTDOWN     = "shutdown" // ckman 停机窗口内被触发，Pool 已停止
-	REASON_DISABLED     = "disabled"
-	REASON_RESTART      = "ckman restart"
+	REASON_OVERLAP       = "overlap"
+	REASON_QUEUE_FULL    = "queue_full"
+	REASON_SHUTDOWN      = "shutdown" // ckman 停机窗口内被触发，Pool 已停止
+	REASON_DISABLED      = "disabled"
+	REASON_RESTART       = "ckman restart"
 	REASON_INST_CHANGED  = "instance changed"
 	REASON_NO_PARTITIONS = "no_partitions" // 本次 run 无分区可备份(窗口空/全部已去重)
 )
 
 type BackupPolicy struct {
-	PolicyID       string      `json:"policy_id"`
-	TaskID         string      `json:"task_id"`   // 同次 BackupRequest 提交的 policy 共享；空表示 legacy/独立 task
-	TaskName       string      `json:"task_name"` // 用户可选填的任务名；空表示无显示名
-	ClusterName    string      `json:"cluster_name"`
-	Database       string      `json:"database"`
-	Table          string      `json:"table"`
-	ScheduleType   string      `json:"schedule_type"` // immediate | scheduled
-	Crontab        string      `json:"crontab"`
-	Instance       string      `json:"instance"`
-	BackupStyle    string      `json:"backup_style"` // full | incremental
-	BackupType     string      `json:"backup_type"`  // partition | daily
-	DaysBefore     int         `json:"days_before"`
-	StartDate      string      `json:"start_date"`
-	RangeStartDate string      `json:"range_start_date"`
-	RangeEndDate   string      `json:"range_end_date"`
-	Partitions     []string    `json:"partitions"`
-	TargetType     string      `json:"target_type"`             // s3 | local
-	ConnectionID   string      `json:"connection_id,omitempty"` // saved StorageConnection; S3 then only holds Bucket
-	S3             TargetS3    `json:"s3"`
-	Local          TargetLocal `json:"local"`
-	Compression    string      `json:"compression"`
-	Checksum       bool        `json:"checksum"`
-	MaxBandwidthMB int         `json:"max_bandwidth_mb"` // S3 上传限速(MB/s)，集群总量；0 不限。仅 backup + S3 生效
-	FullEvery      int         `json:"full_every"`       // native: full backup every N runs; 0 = DEFAULT_NATIVE_FULL_EVERY
-	FullCrontab    string      `json:"full_crontab"`     // native scheduled: cron of full backups (crontab = incrementals)
-	KeepFull       int         `json:"keep_full"`        // native: keep the newest N full chains; 0 = keep all
-	Clean          bool        `json:"clean"`
-	Enabled        bool        `json:"enabled"`
-	Deleted        bool        `json:"deleted"`
-	CreateTime     time.Time   `json:"create_time"`
-	UpdateTime     time.Time   `json:"update_time"`
+	PolicyID       string       `json:"policy_id"`
+	TaskID         string       `json:"task_id"`   // 同次 BackupRequest 提交的 policy 共享；空表示 legacy/独立 task
+	TaskName       string       `json:"task_name"` // 用户可选填的任务名；空表示无显示名
+	ClusterName    string       `json:"cluster_name"`
+	Database       string       `json:"database"`
+	Table          string       `json:"table"`
+	ScheduleType   string       `json:"schedule_type"` // immediate | scheduled
+	Crontab        string       `json:"crontab"`
+	Instance       string       `json:"instance"`
+	BackupStyle    string       `json:"backup_style"` // full | incremental
+	BackupType     string       `json:"backup_type"`  // partition | daily
+	DaysBefore     int          `json:"days_before"`
+	StartDate      string       `json:"start_date"`
+	RangeStartDate string       `json:"range_start_date"`
+	RangeEndDate   string       `json:"range_end_date"`
+	Partitions     []string     `json:"partitions"`
+	TargetType     string       `json:"target_type"`             // s3 | local
+	ConnectionID   string       `json:"connection_id,omitempty"` // saved StorageConnection; S3 then only holds Bucket
+	Azure          *TargetAzure `json:"azure,omitempty"`         // filled at run time from an Azure connection
+	S3             TargetS3     `json:"s3"`
+	Local          TargetLocal  `json:"local"`
+	Compression    string       `json:"compression"`
+	Checksum       bool         `json:"checksum"`
+	MaxBandwidthMB int          `json:"max_bandwidth_mb"` // S3 上传限速(MB/s)，集群总量；0 不限。仅 backup + S3 生效
+	FullEvery      int          `json:"full_every"`       // native: full backup every N runs; 0 = DEFAULT_NATIVE_FULL_EVERY
+	FullCrontab    string       `json:"full_crontab"`     // native scheduled: cron of full backups (crontab = incrementals)
+	KeepFull       int          `json:"keep_full"`        // native: keep the newest N full chains; 0 = keep all
+	Clean          bool         `json:"clean"`
+	Enabled        bool         `json:"enabled"`
+	Deleted        bool         `json:"deleted"`
+	CreateTime     time.Time    `json:"create_time"`
+	UpdateTime     time.Time    `json:"update_time"`
 }
 
 type BackupRun struct {
@@ -259,4 +261,12 @@ func (p BackupRunPartition) KeySegment() string {
 type DeletePartitionRecordsRequest struct {
 	Partitions  []string `json:"partitions"`   // 分区名列表,必填
 	CleanRemote bool     `json:"clean_remote"` // 是否同时清理远端备份数据(best-effort)
+}
+
+// TargetAzure is an Azure Blob container reached with a shared account key.
+type TargetAzure struct {
+	Endpoint    string `json:"endpoint"` // blob service URL, e.g. https://<account>.blob.core.windows.net
+	AccountName string `json:"account_name"`
+	AccountKey  string `json:"account_key"` // encrypted at rest, never returned
+	Container   string `json:"container,omitempty"`
 }

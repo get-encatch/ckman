@@ -13,6 +13,11 @@ func NewStorageForPolicy(policy model.BackupPolicy, cluster model.CKManClickHous
 	switch policy.TargetType {
 	case model.BACKUP_S3:
 		return storage.NewS3(policy.S3, policy.Compression)
+	case model.BACKUP_AZURE:
+		if policy.Azure == nil {
+			return nil
+		}
+		return storage.NewAzure(*policy.Azure, policy.Compression)
 	case model.BACKUP_LOCAL:
 		return storage.NewLocal(policy.Local, policy.Compression, func(host string) common.SshOptions {
 			return common.SshOptions{

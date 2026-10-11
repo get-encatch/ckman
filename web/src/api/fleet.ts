@@ -1,7 +1,7 @@
 // Machines that host ClickHouse and Keeper containers.
 import { queryOptions } from "@tanstack/react-query"
 
-import { api } from "./client"
+import { api, CkmanError } from "./client"
 
 const enc = encodeURIComponent
 
@@ -254,4 +254,105 @@ export function matchesFilter(m: Machine, filter: string) {
     if (value === undefined) return false
     return v === undefined || value === v
   })
+}
+
+// ---- Fleet settings and standbys --------------------------------------------
+
+export type FleetSettings = { standby_interval_min: number }
+
+export const fleetSettingsQuery = () =>
+  queryOptions({
+    queryKey: ["fleet-settings"],
+    queryFn: () => api.get<FleetSettings>("/api/v1/fleet/settings"),
+  })
+
+export function saveFleetSettings(s: FleetSettings) {
+  return api.put<FleetSettings>("/api/v1/fleet/settings", s)
+}
+
+export type StandbyTable = {
+  primary_rows: number
+  standby_rows: number
+}
+
+export type Standby = {
+  primary: string
+  mode: "storage" | "replica"
+  zone: string
+  cluster?: string
+  connection_id?: string
+  bucket?: string
+  interval_min: number
+  databases?: string[] | null
+  replica_ips?: string[] | null
+  paused: boolean
+  promoted_at?: string
+  create_time: string
+  state: "creating" | "ready" | "syncing" | "failed" | "promoted"
+  state_message?: string
+  last_start?: string
+  last_end?: string
+  last_success?: string
+  last_error?: string
+  last_synced: number
+  syncs: number
+  tables?: Record<string, StandbyTable> | null
+  // computed
+  effective_interval_min: number
+  next_sync?: string
+  lag_seconds: number
+  overdue: boolean
+  replica_delay_seconds: number
+  replica_queue: number
+  replica_error?: string
+}
+
+export const standbyQuery = (cluster: string) =>
+  queryOptions({
+    queryKey: ["cluster", cluster, "standby"],
+    queryFn: async () => {
+      try {
+        return await api.get<Standby>(`/api/v1/fleet/standby/${enc(cluster)}`)
+      } catch (err) {
+        if (err instanceof CkmanError && err.code === "5800") return null // none yet
+        throw err
+      }
+    },
+    refetchInterval: 10_000,
+  })
+
+export type StandbyRequest = {
+  primary: string
+  mode: "storage" | "replica"
+  zone: string
+  interval_min: number
+  connection_id?: string
+  bucket?: string
+  databases?: string[]
+  cluster?: FleetClusterRequest
+  replicas?: string[]
+  allow_overcommit?: boolean
+}
+
+export function createStandby(body: StandbyRequest) {
+  return api.post<{ task_id: string }>("/api/v1/fleet/standby", body)
+}
+
+export function standbyAction(
+  cluster: string,
+  action: "sync" | "pause" | "resume" | "promote",
+  opts: { final_sync?: boolean } = {}
+) {
+  return api.post<{ note: string }>(
+    `/api/v1/fleet/standby/${enc(cluster)}/${action}`,
+    undefined,
+    opts.final_sync ? { final_sync: true } : undefined
+  )
+}
+
+export function removeStandby(cluster: string, purge: boolean) {
+  return api.delete(
+    `/api/v1/fleet/standby/${enc(cluster)}`,
+    purge ? { purge: true } : undefined
+  )
 }

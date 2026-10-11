@@ -200,6 +200,12 @@ func InitRouterV1(groupV1 *gin.RouterGroup, config *config.CKManConfig, signal c
 	groupV1.POST("/fleet/clusters/plan", fleetController.PlanCluster)
 	groupV1.POST("/fleet/clusters", fleetController.CreateCluster)
 	groupV1.PUT("/fleet/cluster/:cluster/resources", fleetController.ResizeCluster)
+	groupV1.GET("/fleet/settings", fleetController.GetFleetSettings)
+	groupV1.PUT("/fleet/settings", fleetController.SaveFleetSettings)
+	groupV1.POST("/fleet/standby", fleetController.CreateStandby)
+	groupV1.GET("/fleet/standby/:cluster", fleetController.GetStandby)
+	groupV1.POST("/fleet/standby/:cluster/:action", fleetController.StandbyAction)
+	groupV1.DELETE("/fleet/standby/:cluster", fleetController.DeleteStandby)
 
 	storageConnController := controller.NewStorageConnectionController(WrapMsg)
 	groupV1.GET("/storage/connections", storageConnController.List)

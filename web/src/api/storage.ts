@@ -8,7 +8,8 @@ const enc = encodeURIComponent
 export type StorageConnection = {
   connection_id: string
   name: string
-  type: "s3"
+  type: "s3" | "azure"
+  azure: AzureTarget // Azure connections
   s3: {
     Endpoint: string
     AccessKeyID: string
@@ -22,8 +23,17 @@ export type StorageConnection = {
   update_time: string
 }
 
+// Azure Blob: blob service URL and a shared account key
+export type AzureTarget = {
+  endpoint: string // https://<account>.blob.core.windows.net
+  account_name: string
+  account_key: string // always empty in responses; empty on edit = keep
+}
+
 export type ConnectionInput = {
   name: string
+  type: "s3" | "azure"
+  azure: AzureTarget
   s3: {
     Endpoint: string
     AccessKeyID: string
@@ -82,8 +92,16 @@ export function createBucket(id: string, name: string) {
   return api.post(`/api/v1/storage/connections/${enc(id)}/buckets`, { name })
 }
 
-// S3 bucket naming rules (mirrors the server).
-export function bucketProblem(name: string): string | null {
+// Bucket (S3) or container (Azure) naming rules, mirroring the server.
+export function bucketProblem(
+  name: string,
+  type: "s3" | "azure" = "s3"
+): string | null {
+  if (type === "azure")
+    return /^[a-z0-9](?:[a-z0-9]|-[a-z0-9]){2,62}$/.test(name) &&
+      name.length <= 63
+      ? null
+      : "Use 3–63 lowercase letters, digits or single hyphens, starting and ending with a letter or digit."
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(name))
     return "Use 3–63 lowercase letters, digits, dots or hyphens, starting and ending with a letter or digit."
   if (name.includes("..")) return "No two dots in a row."

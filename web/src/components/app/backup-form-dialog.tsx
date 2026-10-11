@@ -271,7 +271,10 @@ export function BackupFormDialog({
       return setError("List the partitions to back up.")
     if (effectiveTarget === "saved") {
       if (!connectionId) return setError("Choose a storage connection.")
-      const problem = bucketProblem(bucket)
+      const problem = bucketProblem(
+        bucket,
+        connections.data?.find((c) => c.connection_id === connectionId)?.type
+      )
       if (problem) return setError(`Bucket: ${problem}`)
     }
     if (

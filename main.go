@@ -20,6 +20,7 @@ import (
 	"github.com/housepower/ckman/service/backup"
 	"github.com/housepower/ckman/service/cron"
 	"github.com/housepower/ckman/service/runner"
+	"github.com/housepower/ckman/service/standby"
 
 	"github.com/housepower/ckman/config"
 	"github.com/housepower/ckman/log"
@@ -149,6 +150,10 @@ func main() {
 		log.Logger.Fatalf("init backup service failed: %v", err)
 	}
 	defer backupStop()
+
+	standbyStop := make(chan struct{})
+	standby.Start(standbyStop)
+	defer close(standbyStop)
 	log.Logger.Infof("start backup service success (self=%s, max_concurrent=%d)", self, backupMaxConcurrent)
 
 	runnerServ := runner.NewRunnerService(config.GlobalConfig.Server.Ip, config.GlobalConfig.Server)

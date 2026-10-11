@@ -54,6 +54,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { formatAgo } from "@/lib/format"
 
@@ -87,24 +94,36 @@ function StoragePage() {
           </button>
         ),
       }),
-      col.accessor((c) => c.s3.Endpoint, {
-        id: "endpoint",
-        header: "Endpoint",
-        cell: (c) => <span className="font-mono text-xs">{c.getValue()}</span>,
+      col.accessor((c) => (c.type === "azure" ? "Azure Blob" : "S3"), {
+        id: "type",
+        header: "Type",
       }),
+      col.accessor(
+        (c) => (c.type === "azure" ? c.azure.endpoint : c.s3.Endpoint),
+        {
+          id: "endpoint",
+          header: "Endpoint",
+          cell: (c) => (
+            <span className="font-mono text-xs">{c.getValue()}</span>
+          ),
+        }
+      ),
       col.accessor((c) => c.s3.Region, {
         id: "region",
         header: "Region",
         cell: (c) => c.getValue() || "—",
       }),
-      col.accessor((c) => c.s3.AccessKeyID, {
-        id: "key",
-        header: "Access key",
-        enableSorting: false,
-        cell: (c) => (
-          <span className="font-mono text-xs">{maskKey(c.getValue())}</span>
-        ),
-      }),
+      col.accessor(
+        (c) => (c.type === "azure" ? c.azure.account_name : c.s3.AccessKeyID),
+        {
+          id: "key",
+          header: "Access key / account",
+          enableSorting: false,
+          cell: (c) => (
+            <span className="font-mono text-xs">{maskKey(c.getValue())}</span>
+          ),
+        }
+      ),
       col.accessor("update_time", {
         header: "Updated",
         cell: (c) => formatAgo(c.getValue()),
@@ -153,7 +172,7 @@ function StoragePage() {
     <>
       <PageHeader
         title="Storage"
-        description="S3 connections that backups can use. Keys are stored encrypted and never shown again."
+        description="S3 and Azure Blob connections that backups and standbys use. Keys are stored encrypted and never shown again."
         actions={
           <Button onClick={() => setEditing("new")}>
             <PlusIcon /> Add connection
@@ -226,6 +245,12 @@ function ConnectionDialog({
       existing
         ? {
             name: existing.name,
+            type: existing.type ?? "s3",
+            azure: {
+              endpoint: existing.azure?.endpoint ?? "",
+              account_name: existing.azure?.account_name ?? "",
+              account_key: "",
+            },
             s3: {
               Endpoint: existing.s3.Endpoint,
               AccessKeyID: "",
@@ -242,6 +267,11 @@ function ConnectionDialog({
     setTested(null)
     setForm((f) => ({ ...f, s3: { ...f.s3, ...patch } }))
   }
+  const setAz = (patch: Partial<ConnectionInput["azure"]>) => {
+    setTested(null)
+    setForm((f) => ({ ...f, azure: { ...f.azure, ...patch } }))
+  }
+  const azure = form.type === "azure"
 
   async function test() {
     setBusy("test")
@@ -282,10 +312,11 @@ function ConnectionDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            {existing ? `Edit ${existing.name}` : "Add S3 connection"}
+            {existing ? `Edit ${existing.name}` : "Add storage connection"}
           </DialogTitle>
           <DialogDescription>
-            ckman checks the connection before saving by listing its buckets.
+            ckman checks the connection before saving by listing its{" "}
+            {azure ? "containers" : "buckets"}.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={save}>
@@ -300,67 +331,143 @@ function ConnectionDialog({
                 required
               />
             </Field>
-            <Field>
-              <FieldLabel htmlFor="sc-endpoint">Endpoint</FieldLabel>
-              <Input
-                id="sc-endpoint"
-                value={form.s3.Endpoint}
-                onChange={(e) => set({ Endpoint: e.target.value })}
-                placeholder="https://s3.ap-south-1.amazonaws.com"
-                className="font-mono"
-                required
-              />
-              <FieldDescription>
-                Without a bucket name. http:// for local MinIO-style stores.
-              </FieldDescription>
-            </Field>
-            <div className="grid gap-4 sm:grid-cols-2">
+            {!existing && (
               <Field>
-                <FieldLabel htmlFor="sc-ak">Access key ID</FieldLabel>
-                <Input
-                  id="sc-ak"
-                  value={form.s3.AccessKeyID}
-                  onChange={(e) => set({ AccessKeyID: e.target.value })}
-                  placeholder={existing ? "Unchanged" : undefined}
-                  autoComplete="off"
-                  required={!existing}
-                />
+                <FieldLabel>Type</FieldLabel>
+                <Select
+                  items={{
+                    s3: "Amazon S3 or S3-compatible",
+                    azure: "Azure Blob Storage",
+                  }}
+                  value={form.type}
+                  onValueChange={(v) => {
+                    setTested(null)
+                    setForm((f) => ({ ...f, type: v as "s3" | "azure" }))
+                  }}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="s3">
+                      Amazon S3 or S3-compatible
+                    </SelectItem>
+                    <SelectItem value="azure">Azure Blob Storage</SelectItem>
+                  </SelectContent>
+                </Select>
               </Field>
-              <Field>
-                <FieldLabel htmlFor="sc-sk">Secret access key</FieldLabel>
-                <Input
-                  id="sc-sk"
-                  type="password"
-                  value={form.s3.SecretAccessKey}
-                  onChange={(e) => set({ SecretAccessKey: e.target.value })}
-                  placeholder={existing ? "Unchanged" : undefined}
-                  autoComplete="new-password"
-                  required={!existing}
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="sc-region">Region</FieldLabel>
-                <Input
-                  id="sc-region"
-                  value={form.s3.Region}
-                  onChange={(e) => set({ Region: e.target.value })}
-                  placeholder="us-east-1"
-                />
-              </Field>
-              <Label className="flex items-center gap-2 self-end pb-2 font-normal">
-                <Checkbox
-                  checked={!!form.s3.InsecureSkipVerify}
-                  onCheckedChange={(v) =>
-                    set({ InsecureSkipVerify: v === true })
-                  }
-                />
-                Skip TLS certificate check
-              </Label>
-            </div>
+            )}
+            {azure ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="sc-az-endpoint">
+                    Blob service URL
+                  </FieldLabel>
+                  <Input
+                    id="sc-az-endpoint"
+                    value={form.azure.endpoint}
+                    onChange={(e) => setAz({ endpoint: e.target.value })}
+                    placeholder="https://myaccount.blob.core.windows.net"
+                    className="font-mono"
+                    required
+                  />
+                  <FieldDescription>
+                    The storage account&apos;s blob endpoint, without a
+                    container.
+                  </FieldDescription>
+                </Field>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="sc-az-account">
+                      Account name
+                    </FieldLabel>
+                    <Input
+                      id="sc-az-account"
+                      value={form.azure.account_name}
+                      onChange={(e) => setAz({ account_name: e.target.value })}
+                      autoComplete="off"
+                      required
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="sc-az-key">Account key</FieldLabel>
+                    <Input
+                      id="sc-az-key"
+                      type="password"
+                      value={form.azure.account_key}
+                      onChange={(e) => setAz({ account_key: e.target.value })}
+                      placeholder={existing ? "Unchanged" : undefined}
+                      autoComplete="new-password"
+                      required={!existing}
+                    />
+                  </Field>
+                </div>
+              </>
+            ) : (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="sc-endpoint">Endpoint</FieldLabel>
+                  <Input
+                    id="sc-endpoint"
+                    value={form.s3.Endpoint}
+                    onChange={(e) => set({ Endpoint: e.target.value })}
+                    placeholder="https://s3.ap-south-1.amazonaws.com"
+                    className="font-mono"
+                    required
+                  />
+                  <FieldDescription>
+                    Without a bucket name. http:// for local MinIO-style stores.
+                  </FieldDescription>
+                </Field>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="sc-ak">Access key ID</FieldLabel>
+                    <Input
+                      id="sc-ak"
+                      value={form.s3.AccessKeyID}
+                      onChange={(e) => set({ AccessKeyID: e.target.value })}
+                      placeholder={existing ? "Unchanged" : undefined}
+                      autoComplete="off"
+                      required={!existing}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="sc-sk">Secret access key</FieldLabel>
+                    <Input
+                      id="sc-sk"
+                      type="password"
+                      value={form.s3.SecretAccessKey}
+                      onChange={(e) => set({ SecretAccessKey: e.target.value })}
+                      placeholder={existing ? "Unchanged" : undefined}
+                      autoComplete="new-password"
+                      required={!existing}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="sc-region">Region</FieldLabel>
+                    <Input
+                      id="sc-region"
+                      value={form.s3.Region}
+                      onChange={(e) => set({ Region: e.target.value })}
+                      placeholder="us-east-1"
+                    />
+                  </Field>
+                  <Label className="flex items-center gap-2 self-end pb-2 font-normal">
+                    <Checkbox
+                      checked={!!form.s3.InsecureSkipVerify}
+                      onCheckedChange={(v) =>
+                        set({ InsecureSkipVerify: v === true })
+                      }
+                    />
+                    Skip TLS certificate check
+                  </Label>
+                </div>
+              </>
+            )}
             {tested && (
               <p className="flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-400">
                 <CheckCircle2Icon className="size-4" />
-                Connected. {tested.length} bucket
+                Connected. {tested.length} {azure ? "container" : "bucket"}
                 {tested.length === 1 ? "" : "s"} visible.
               </p>
             )}
@@ -371,7 +478,10 @@ function ConnectionDialog({
               type="button"
               variant="outline"
               onClick={() => void test()}
-              disabled={busy !== null || !form.s3.Endpoint}
+              disabled={
+                busy !== null ||
+                !(azure ? form.azure.endpoint : form.s3.Endpoint)
+              }
             >
               {busy === "test" && <Spinner />} Test connection
             </Button>
@@ -393,6 +503,8 @@ function ConnectionDialog({
 function emptyInput(): ConnectionInput {
   return {
     name: "",
+    type: "s3",
+    azure: { endpoint: "", account_name: "", account_key: "" },
     s3: { Endpoint: "", AccessKeyID: "", SecretAccessKey: "", Region: "" },
   }
 }
@@ -416,7 +528,7 @@ function BucketsSheet({
   async function create(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!connection) return
-    const problem = bucketProblem(name)
+    const problem = bucketProblem(name, connection.type)
     if (problem) return setError(problem)
     setBusy(true)
     setError(null)

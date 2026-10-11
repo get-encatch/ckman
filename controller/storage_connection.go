@@ -18,6 +18,7 @@ func NewStorageConnectionController(wrapfunc Wrapfunc) *StorageConnectionControl
 // maskConnection never sends the secret key back to the browser.
 func maskConnection(c model.StorageConnection) model.StorageConnection {
 	c.S3.SecretAccessKey = ""
+	c.Azure.AccountKey = ""
 	return c
 }
 
@@ -77,7 +78,7 @@ func (c *StorageConnectionController) Test(ctx *gin.Context) {
 		c.wrapfunc(ctx, model.E_INVALID_PARAMS, err)
 		return
 	}
-	if conn.ConnectionID != "" && (conn.S3.AccessKeyID == "" || conn.S3.SecretAccessKey == "") {
+	if conn.Type != model.STORAGE_CONN_AZURE && conn.ConnectionID != "" && (conn.S3.AccessKeyID == "" || conn.S3.SecretAccessKey == "") {
 		old, err := backup.GetConnection(conn.ConnectionID)
 		if err != nil {
 			c.wrapfunc(ctx, model.E_DATA_SELECT_FAILED, err)
@@ -90,7 +91,21 @@ func (c *StorageConnectionController) Test(ctx *gin.Context) {
 			conn.S3.SecretAccessKey = old.S3.SecretAccessKey
 		}
 	}
-	buckets, err := backup.ListS3Buckets(conn.S3)
+	var buckets []string
+	var err error
+	if conn.Type == model.STORAGE_CONN_AZURE {
+		if conn.ConnectionID != "" && conn.Azure.AccountKey == "" {
+			old, gerr := backup.GetConnection(conn.ConnectionID)
+			if gerr != nil {
+				c.wrapfunc(ctx, model.E_DATA_SELECT_FAILED, gerr)
+				return
+			}
+			conn.Azure.AccountKey = old.Azure.AccountKey
+		}
+		buckets, err = backup.ListAzureContainers(conn.Azure)
+	} else {
+		buckets, err = backup.ListS3Buckets(conn.S3)
+	}
 	if err != nil {
 		c.wrapfunc(ctx, model.E_DATA_CHECK_FAILED, err)
 		return
