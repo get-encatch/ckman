@@ -107,17 +107,23 @@ export function RunStatusBadge({ status }: { status: RunStatus }) {
 export function UsageBar({
   fraction,
   label,
+  title,
 }: {
   fraction: number | null
   label: string
+  title?: string
 }) {
   if (fraction === null)
-    return <span className="text-muted-foreground">{label}</span>
+    return (
+      <span className="text-muted-foreground" title={title}>
+        {label}
+      </span>
+    )
   const pct = Math.min(100, Math.max(0, fraction * 100))
   const color =
     pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-emerald-500"
   return (
-    <div className="flex min-w-36 flex-col gap-1">
+    <div className="flex min-w-36 flex-col gap-1" title={title}>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
           className={cn("h-full rounded-full", color)}

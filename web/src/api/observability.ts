@@ -200,6 +200,30 @@ export type KeeperNodeStatus = {
   watch_count: number
 }
 
+// Machine health of each ClickHouse Keeper server, read over SSH (cached 15 s).
+export type KeeperHostStats = {
+  host: string
+  cores: number
+  load1: number
+  mem_used: number
+  mem_total: number
+  disk_used: number // whole volume holding Keeper's data
+  disk_total: number
+  data_bytes: number // Keeper's logs and snapshots
+  proc_rss: number // Keeper process memory
+  error?: string
+}
+
+export const keeperHostStatsQuery = (cluster: string) =>
+  queryOptions({
+    queryKey: ["cluster", cluster, "keeper-host-stats"],
+    queryFn: async () =>
+      (await api.get<KeeperHostStats[] | null>(
+        `/api/v1/zk/host_stats/${enc(cluster)}`
+      )) ?? [],
+    refetchInterval: 30_000,
+  })
+
 export const keeperStatusQuery = (cluster: string) =>
   queryOptions({
     queryKey: ["cluster", cluster, "keeper-status"],
