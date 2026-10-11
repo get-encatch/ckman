@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useRouteContext } from "@tanstack/react-router"
-import { MoreHorizontalIcon, PlusIcon } from "lucide-react"
+import { HistoryIcon, MoreHorizontalIcon, PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { errorMessage } from "@/api/client"
@@ -24,6 +24,7 @@ import { ConfirmDialog } from "@/components/app/confirm-dialog"
 import { columnHelper, DataTable } from "@/components/app/data-table"
 import { ErrorState } from "@/components/app/misc"
 import { PageBody, Section } from "@/components/app/page-header"
+import { RestoreDialog } from "@/components/app/restore-dialog"
 import { RunStatusBadge } from "@/components/app/status"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -65,6 +66,7 @@ function BackupsPage() {
   })
   const queryClient = useQueryClient()
   const [formOpen, setFormOpen] = useState(false)
+  const [restoreOpen, setRestoreOpen] = useState(false)
   const [viewing, setViewing] = useState<string | null>(null)
   const [removing, setRemoving] = useState<BackupTask | null>(null)
 
@@ -91,9 +93,9 @@ function BackupsPage() {
         queryClient.invalidateQueries({ queryKey: ["backup-policy-runs"] })
       )
 
-  async function runNow(task: BackupTask) {
+  async function runNow(task: BackupTask, full = false) {
     const results = await Promise.allSettled(
-      task.policies.map((p) => triggerPolicy(p.policy_id))
+      task.policies.map((p) => triggerPolicy(p.policy_id, full))
     )
     const failed = results.filter((r) => r.status === "rejected")
     if (failed.length)
@@ -234,9 +236,22 @@ function BackupsPage() {
                   </DropdownMenuItem>
                   {canWrite && (
                     <>
-                      <DropdownMenuItem onClick={() => void runNow(t)}>
-                        Run now
-                      </DropdownMenuItem>
+                      {t.policies[0].backup_style === "native" ? (
+                        <>
+                          <DropdownMenuItem onClick={() => void runNow(t)}>
+                            Run incremental now
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => void runNow(t, true)}
+                          >
+                            Run full backup now
+                          </DropdownMenuItem>
+                        </>
+                      ) : (
+                        <DropdownMenuItem onClick={() => void runNow(t)}>
+                          Run now
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         variant="destructive"
@@ -273,9 +288,18 @@ function BackupsPage() {
                 </Badge>
               )}
             {canWrite && (
-              <Button size="sm" onClick={() => setFormOpen(true)}>
-                <PlusIcon /> New backup
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setRestoreOpen(true)}
+                >
+                  <HistoryIcon /> Restore…
+                </Button>
+                <Button size="sm" onClick={() => setFormOpen(true)}>
+                  <PlusIcon /> New backup
+                </Button>
+              </>
             )}
           </>
         }
@@ -295,6 +319,13 @@ function BackupsPage() {
         open={formOpen}
         onOpenChange={setFormOpen}
         onCreated={refresh}
+      />
+      <RestoreDialog
+        key={restoreOpen ? "open" : "closed"}
+        cluster={cluster}
+        policies={policies.data ?? []}
+        open={restoreOpen}
+        onOpenChange={setRestoreOpen}
       />
       <BackupTaskSheet
         cluster={cluster}

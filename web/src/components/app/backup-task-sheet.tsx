@@ -16,11 +16,13 @@ import {
   type BackupTask,
 } from "@/api/data-manage"
 import { connectionsQuery } from "@/api/storage"
+import { ConfirmDialog } from "@/components/app/confirm-dialog"
 import { columnHelper, DataTable } from "@/components/app/data-table"
 import { ErrorState, KeyValue } from "@/components/app/misc"
 import { RunStatusBadge } from "@/components/app/status"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
 import {
   Dialog,
   DialogContent,
@@ -164,17 +166,43 @@ export function BackupTaskSheet({
                   "Tables",
                   policies.map((p) => `${p.database}.${p.table}`).join(", "),
                 ],
-                [
-                  "Schedule",
-                  first.schedule_type === "scheduled"
-                    ? `${first.crontab} on ${first.instance}${first.enabled ? "" : " (paused)"}`
-                    : "One-off",
-                ],
+                ...((first.schedule_type !== "scheduled"
+                  ? [["Schedule", "One-off"]]
+                  : first.full_crontab
+                    ? [
+                        [
+                          "Full backups",
+                          `${first.full_crontab}${first.enabled ? "" : " (paused)"}`,
+                        ],
+                        ["Incrementals", first.crontab],
+                        [
+                          "Keep",
+                          first.keep_full
+                            ? `Last ${first.keep_full} full backups and their incrementals`
+                            : "Everything",
+                        ],
+                      ]
+                    : [
+                        [
+                          "Schedule",
+                          `${first.crontab} on ${first.instance}${first.enabled ? "" : " (paused)"}`,
+                        ],
+                      ]) as [string, string][]),
+                ...(next.data?.next_full_run_at
+                  ? ([
+                      [
+                        "Next full backup",
+                        formatDateTime(next.data.next_full_run_at),
+                      ],
+                    ] as [string, string][])
+                  : []),
                 ...(next.data?.next_run_at
-                  ? ([["Next run", formatDateTime(next.data.next_run_at)]] as [
-                      string,
-                      string,
-                    ][])
+                  ? ([
+                      [
+                        first.full_crontab ? "Next incremental" : "Next run",
+                        formatDateTime(next.data.next_run_at),
+                      ],
+                    ] as [string, string][])
                   : []),
                 ["Mode", describeMode(first)],
                 [
@@ -230,11 +258,16 @@ function RunDialog({
   })
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [wholeTable, setWholeTable] = useState(false)
+  const [replace, setReplace] = useState(false)
+  const [confirmReplace, setConfirmReplace] = useState(false)
   const [restoring, setRestoring] = useState(false)
   const [lastRun, setLastRun] = useState(runId)
   if (runId !== lastRun) {
     setLastRun(runId)
     setSelected(new Set())
+    setWholeTable(false)
+    setReplace(false)
   }
 
   const r = run.data
@@ -245,8 +278,16 @@ function RunDialog({
     if (!r) return
     setRestoring(true)
     try {
-      await restoreFromRun(cluster, r.run_id, [...selected])
-      toast.success(`Restore of ${selected.size} partition(s) queued`)
+      const whole = r.native === true && wholeTable
+      await restoreFromRun(cluster, r.run_id, whole ? [] : [...selected], {
+        wholeTable: whole,
+        replace,
+      })
+      toast.success(
+        whole
+          ? `Restore of ${r.database}.${r.table} queued`
+          : `Restore of ${selected.size} partition(s) queued`
+      )
       await queryClient.invalidateQueries({ queryKey: ["backup-policy-runs"] })
       onClose()
     } catch (err) {
@@ -355,22 +396,72 @@ function RunDialog({
           </div>
         )}
         {restorable && canWrite && (
-          <DialogFooter className="items-center sm:justify-between">
-            <p className="text-xs text-muted-foreground">
-              {r.native
-                ? "Restores the chosen partitions from this whole-table backup (ClickHouse reads the earlier backups of its chain too). Rows are added: drop a partition first if it still holds data."
-                : "Restoring adds the rows back into the table. If a partition still exists, its rows get duplicated: drop it first."}
-            </p>
-            <Button
-              disabled={selected.size === 0 || restoring}
-              onClick={() => void restore()}
-            >
-              {restoring
-                ? "Starting…"
-                : `Restore ${selected.size || ""} partition${selected.size === 1 ? "" : "s"}`}
-            </Button>
-          </DialogFooter>
+          <div className="flex flex-col gap-3 border-t pt-3">
+            {r.native && (
+              <Label className="flex items-center gap-2 font-normal">
+                <Checkbox
+                  checked={wholeTable}
+                  onCheckedChange={(v) => setWholeTable(v === true)}
+                />
+                Restore the whole table (all partitions)
+              </Label>
+            )}
+            <Label className="flex items-start gap-2 font-normal">
+              <Checkbox
+                checked={replace}
+                onCheckedChange={(v) => setReplace(v === true)}
+                className="mt-0.5"
+              />
+              <span>
+                Replace current data
+                <span className="block text-xs text-muted-foreground">
+                  {wholeTable && r.native
+                    ? "Empties the table on every shard first."
+                    : "Drops the chosen partitions first."}{" "}
+                  Without this, restored rows are added to what's there, so data
+                  that still exists gets duplicated.
+                </span>
+              </span>
+            </Label>
+            <DialogFooter className="items-center sm:justify-between">
+              <p className="text-xs text-muted-foreground">
+                {r.native
+                  ? "ClickHouse also reads the earlier backups of this chain."
+                  : "Restores from this run's partition backups."}
+              </p>
+              <Button
+                variant={replace ? "destructive" : "default"}
+                disabled={
+                  (!(wholeTable && r.native) && selected.size === 0) ||
+                  restoring
+                }
+                onClick={() =>
+                  replace ? setConfirmReplace(true) : void restore()
+                }
+              >
+                {restoring
+                  ? "Starting…"
+                  : wholeTable && r.native
+                    ? "Restore table"
+                    : `Restore ${selected.size || ""} partition${selected.size === 1 ? "" : "s"}`}
+              </Button>
+            </DialogFooter>
+          </div>
         )}
+        <ConfirmDialog
+          open={confirmReplace}
+          onOpenChange={setConfirmReplace}
+          title={`Replace data in ${r?.database}.${r?.table}?`}
+          description={
+            wholeTable && r?.native
+              ? "The table is emptied on every shard, then filled from this backup. Rows written after the backup are lost."
+              : `${selected.size} partition(s) are dropped on every shard, then restored from this backup.`
+          }
+          typeToConfirm={r?.table}
+          confirmLabel="Replace and restore"
+          destructive
+          onConfirm={() => restore()}
+        />
       </DialogContent>
     </Dialog>
   )

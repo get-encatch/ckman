@@ -45,6 +45,68 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { formatBytes } from "@/lib/format"
 
+const FULL_PRESETS: Record<string, string> = {
+  "0 0 2 * * 0": "Weekly, Sunday 02:00",
+  "0 0 2 * * *": "Daily at 02:00",
+  "0 0 2 1 * *": "Monthly, 1st at 02:00",
+  custom: "Custom…",
+}
+
+const INCR_PRESETS: Record<string, string> = {
+  "0 0 * * * *": "Every hour",
+  "0 0 */4 * * *": "Every 4 hours",
+  "0 0 */6 * * *": "Every 6 hours",
+  "0 0 */12 * * *": "Every 12 hours",
+  custom: "Custom…",
+}
+
+// A preset select with a custom-cron field.
+function CronPicker({
+  label,
+  presets,
+  preset,
+  custom,
+  onPreset,
+  onCustom,
+}: {
+  label: string
+  presets: Record<string, string>
+  preset: string
+  custom: string
+  onPreset: (v: string) => void
+  onCustom: (v: string) => void
+}) {
+  return (
+    <Field>
+      <FieldLabel>{label}</FieldLabel>
+      <Select
+        items={presets}
+        value={preset}
+        onValueChange={(v) => onPreset(v as string)}
+      >
+        <SelectTrigger className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {Object.entries(presets).map(([v, l]) => (
+            <SelectItem key={v} value={v}>
+              {l}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {preset === "custom" && (
+        <Input
+          value={custom}
+          onChange={(e) => onCustom(e.target.value)}
+          placeholder="0 30 1 * * *"
+          className="font-mono"
+        />
+      )}
+    </Field>
+  )
+}
+
 const CRON_PRESETS: Record<string, string> = {
   "0 0 2 * * *": "Daily at 02:00",
   "0 0 * * * *": "Every hour",
@@ -120,7 +182,11 @@ export function BackupFormDialog({
   const [database, setDatabase] = useState<string | null>(null)
   const [tables, setTables] = useState<Set<string>>(new Set())
   const [mode, setMode] = useState<Mode>("native")
-  const [fullEvery, setFullEvery] = useState(7)
+  const [fullPreset, setFullPreset] = useState("0 0 2 * * 0")
+  const [fullCustom, setFullCustom] = useState("")
+  const [incrPreset, setIncrPreset] = useState("0 0 * * * *")
+  const [incrCustom, setIncrCustom] = useState("")
+  const [keepFull, setKeepFull] = useState(4)
   const [daysBefore, setDaysBefore] = useState(1)
   const [partitions, setPartitions] = useState("")
   // "saved" = an S3 connection from the Storage page; "s3" = typed in here
@@ -181,11 +247,17 @@ export function BackupFormDialog({
   }
 
   async function submit() {
-    const crontab = cronPreset === "custom" ? cron.trim() : cronPreset
+    const pick = (preset: string, custom: string) =>
+      preset === "custom" ? custom.trim() : preset
+    const crontab = native
+      ? pick(incrPreset, incrCustom)
+      : pick(cronPreset, cron)
+    const fullCrontab = native ? pick(fullPreset, fullCustom) : ""
     if (!database || tables.size === 0)
       return setError("Pick a database and at least one table.")
     if (scheduled) {
-      const problem = cronProblem(crontab)
+      const problem =
+        cronProblem(crontab) ?? (native ? cronProblem(fullCrontab) : null)
       if (problem) return setError(problem)
       if (!instances.data?.[0])
         return setError("No ckman instance available to run the schedule.")
@@ -220,7 +292,8 @@ export function BackupFormDialog({
       ...MODE_REQUEST[effectiveMode],
       partitions: effectiveMode === "named" ? partList : undefined,
       days_before: effectiveMode === "new-days" ? daysBefore : undefined,
-      full_every: native ? fullEvery : undefined,
+      full_crontab: scheduled && native ? fullCrontab : undefined,
+      keep_full: scheduled && native ? keepFull : undefined,
       target: effectiveTarget === "local" ? "local" : "s3",
       connection_id:
         effectiveTarget === "saved" ? (connectionId ?? undefined) : undefined,
@@ -287,33 +360,62 @@ export function BackupFormDialog({
                 <RadioGroupItem value="scheduled" /> On a schedule
               </Label>
             </RadioGroup>
-            {scheduled && (
+            {scheduled && native && (
               <div className="grid gap-3 sm:grid-cols-2">
-                <Select
-                  items={CRON_PRESETS}
-                  value={cronPreset}
-                  onValueChange={(v) => setCronPreset(v as string)}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(CRON_PRESETS).map(([v, l]) => (
-                      <SelectItem key={v} value={v}>
-                        {l}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {cronPreset === "custom" && (
+                <CronPicker
+                  label="Full backup"
+                  presets={FULL_PRESETS}
+                  preset={fullPreset}
+                  custom={fullCustom}
+                  onPreset={setFullPreset}
+                  onCustom={setFullCustom}
+                />
+                <CronPicker
+                  label="Incremental backups"
+                  presets={INCR_PRESETS}
+                  preset={incrPreset}
+                  custom={incrCustom}
+                  onPreset={setIncrPreset}
+                  onCustom={setIncrCustom}
+                />
+                <Field orientation="horizontal" className="sm:col-span-2">
+                  <FieldLabel htmlFor="bk-keep">Keep the last</FieldLabel>
                   <Input
-                    value={cron}
-                    onChange={(e) => setCron(e.target.value)}
-                    placeholder="0 30 1 * * *"
-                    className="font-mono"
+                    id="bk-keep"
+                    type="number"
+                    min={0}
+                    max={52}
+                    value={keepFull}
+                    onChange={(e) =>
+                      setKeepFull(
+                        Math.min(52, Math.max(0, Number(e.target.value) || 0))
+                      )
+                    }
+                    className="w-20"
                   />
-                )}
+                  <span className="text-sm text-muted-foreground">
+                    full backups with their incrementals (0 keeps everything)
+                  </span>
+                </Field>
                 <FieldDescription className="sm:col-span-2">
+                  Each full backup starts a new chain; incrementals copy only
+                  what changed since the previous backup. Older chains are
+                  deleted after a new full backup succeeds. Cron format: 6
+                  fields, seconds first; at least an hour apart.
+                </FieldDescription>
+              </div>
+            )}
+            {scheduled && !native && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <CronPicker
+                  label="Run"
+                  presets={CRON_PRESETS}
+                  preset={cronPreset}
+                  custom={cron}
+                  onPreset={setCronPreset}
+                  onCustom={setCron}
+                />
+                <FieldDescription className="self-end sm:col-span-2">
                   Cron format has 6 fields, seconds first; runs must be at least
                   an hour apart.
                 </FieldDescription>
@@ -420,29 +522,6 @@ export function BackupFormDialog({
               ))}
             </RadioGroup>
           </FieldSet>
-          {native && (
-            <Field orientation="horizontal">
-              <FieldLabel htmlFor="bk-full-every">
-                Start a new full backup every
-              </FieldLabel>
-              <Input
-                id="bk-full-every"
-                type="number"
-                min={1}
-                max={60}
-                value={fullEvery}
-                onChange={(e) =>
-                  setFullEvery(
-                    Math.min(60, Math.max(1, Number(e.target.value) || 1))
-                  )
-                }
-                className="w-20"
-              />
-              <span className="text-sm text-muted-foreground">
-                runs (each backup needs the earlier ones of its chain)
-              </span>
-            </Field>
-          )}
           {effectiveMode === "new-days" && (
             <Field orientation="horizontal">
               <FieldLabel htmlFor="bk-days">Skip the newest</FieldLabel>
