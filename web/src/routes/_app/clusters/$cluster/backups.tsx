@@ -154,6 +154,16 @@ function BackupsPage() {
         id: "mode",
         header: "Mode",
       }),
+      col.accessor((t) => t.policies[0].target_type, {
+        id: "target",
+        header: "Target",
+        cell: (c) => {
+          const p = c.row.original.policies[0]
+          return p.target_type === "s3"
+            ? `S3 · ${p.s3?.Bucket}`
+            : `Local · ${p.local?.path}`
+        },
+      }),
       col.display({
         id: "last",
         header: "Last run",
