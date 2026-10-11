@@ -103,3 +103,12 @@ func (s *S3) NativeBackupSQL(key, baseKey string) string {
 func (s *S3) NativeRestoreSQL(partitionIDs []string, key string) string {
 	return PartitionsClause(partitionIDs) + " FROM " + s.dest(key)
 }
+
+// DeleteNativeBackup removes all objects of one native run (every shard).
+// The trailing slash keeps run r1 from matching run r10.
+func (s *S3) DeleteNativeBackup(_ []string, runPrefix string) error {
+	if s.client == nil {
+		return errors.New("s3 not initialized")
+	}
+	return s.client.Remove(s.cfg.Bucket, strings.TrimRight(runPrefix, "/")+"/")
+}

@@ -31,6 +31,7 @@ type Scheduler struct {
 	cron    CronAdapter
 	policy  PolicyRepo
 	fn      func(model.BackupPolicy) // real business: trigger one Submit
+	fullFn  func(model.BackupPolicy) // native policies with a full_crontab: trigger a full backup
 	tracked map[string]string        // policy_id -> registered crontab
 	cancel  context.CancelFunc
 }
@@ -50,6 +51,16 @@ func NewScheduler(self string, cron CronAdapter, policy PolicyRepo,
 
 // Start immediately runs one Reconcile then launches a background goroutine that
 // repeats at ReconcileInterval until ctx is cancelled or Stop is called.
+// fullEntryID is the cron entry of a native policy's full-backup schedule.
+func fullEntryID(policyID string) string { return policyID + "#full" }
+
+// WithFull registers fn for the full-backup schedule of native policies
+// (BackupPolicy.FullCrontab); Crontab then drives the incrementals.
+func (s *Scheduler) WithFull(fn func(model.BackupPolicy)) *Scheduler {
+	s.fullFn = fn
+	return s
+}
+
 func (s *Scheduler) Start(ctx context.Context) {
 	ctx, s.cancel = context.WithCancel(ctx)
 	s.Reconcile() // run immediately on startup
@@ -85,8 +96,14 @@ func (s *Scheduler) Reconcile() {
 
 	// Build the desired state map: policy_id -> crontab.
 	want := make(map[string]string, len(policies))
+	entries := make([]schedEntry, 0, len(policies))
 	for _, p := range policies {
 		want[p.PolicyID] = p.Crontab
+		entries = append(entries, schedEntry{p.PolicyID, p.Crontab, p, s.fn})
+		if s.fullFn != nil && p.BackupStyle == model.BACKUP_STYLE_NATIVE && p.FullCrontab != "" {
+			want[fullEntryID(p.PolicyID)] = p.FullCrontab
+			entries = append(entries, schedEntry{fullEntryID(p.PolicyID), p.FullCrontab, p, s.fullFn})
+		}
 	}
 
 	// Remove: in tracked but not in want.
@@ -99,23 +116,29 @@ func (s *Scheduler) Reconcile() {
 	}
 
 	// Add / replace: in want but not yet tracked, or crontab changed.
-	for _, p := range policies {
-		registered, exists := s.tracked[p.PolicyID]
-		if exists && registered == p.Crontab {
+	for _, en := range entries {
+		registered, exists := s.tracked[en.id]
+		if exists && registered == en.spec {
 			continue // stable, no-op
 		}
 		if exists {
-			s.cron.Remove(p.PolicyID)
-			log.Logger.Infof("[scheduler] reconcile replace %s: %s -> %s", p.PolicyID, registered, p.Crontab)
+			s.cron.Remove(en.id)
+			log.Logger.Infof("[scheduler] reconcile replace %s: %s -> %s", en.id, registered, en.spec)
 		} else {
-			log.Logger.Infof("[scheduler] reconcile add %s: %s", p.PolicyID, p.Crontab)
+			log.Logger.Infof("[scheduler] reconcile add %s: %s", en.id, en.spec)
 		}
-		// Capture loop variable explicitly — avoids loop-variable reuse bug on Go < 1.22.
-		policy := p
-		s.cron.Add(p.PolicyID, p.Crontab, func() error {
-			s.fn(policy)
+		policy, fn := en.policy, en.fn
+		s.cron.Add(en.id, en.spec, func() error {
+			fn(policy)
 			return nil
 		})
-		s.tracked[p.PolicyID] = p.Crontab
+		s.tracked[en.id] = en.spec
 	}
+}
+
+type schedEntry struct {
+	id     string
+	spec   string
+	policy model.BackupPolicy
+	fn     func(model.BackupPolicy)
 }

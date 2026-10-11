@@ -130,3 +130,15 @@ func (l *Local) NativeBackupSQL(key, baseKey string) string {
 func (l *Local) NativeRestoreSQL(partitionIDs []string, key string) string {
 	return PartitionsClause(partitionIDs) + fmt.Sprintf(" FROM File('%s/%s')", l.cfg.Path, key)
 }
+
+// DeleteNativeBackup removes one native run's directory from every host: a
+// shard's backup sits on whichever replica took it.
+func (l *Local) DeleteNativeBackup(hosts []string, runPrefix string) error {
+	var errs []error
+	for _, h := range hosts {
+		if err := l.CleanPartition(h, runPrefix); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", h, err))
+		}
+	}
+	return errors.Join(errs...)
+}

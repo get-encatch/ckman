@@ -12,6 +12,8 @@ import (
 type RestoreRequest struct {
 	SourceRunID string   `json:"source_run_id"`
 	Partitions  []string `json:"partitions"`
+	WholeTable  bool     `json:"whole_table"` // native backups: restore the whole table (partitions ignored)
+	Replace     bool     `json:"replace"`     // empty the table (whole) or drop the chosen partitions first
 }
 
 // SubmitRestore 创建 OP_RESTORE 类型的 BackupRun，从源 success run 复制 partition 元数据。
@@ -20,7 +22,7 @@ func (s *Service) SubmitRestore(cluster string, req RestoreRequest) (string, err
 	if req.SourceRunID == "" {
 		return "", errors.New("source_run_id empty")
 	}
-	if len(req.Partitions) == 0 {
+	if len(req.Partitions) == 0 && !req.WholeTable {
 		return "", errors.New("partitions empty")
 	}
 	src, err := s.repo.GetRun(req.SourceRunID)
@@ -32,6 +34,18 @@ func (s *Service) SubmitRestore(cluster string, req RestoreRequest) (string, err
 	}
 	if src.Status != model.BACKUP_STATUS_SUCCESS {
 		return "", fmt.Errorf("source run status is %s, only success runs can be restored", src.Status)
+	}
+
+	if req.WholeTable {
+		if !src.Native {
+			return "", errors.New("whole-table restore needs a whole-table (native) backup")
+		}
+		req.Partitions = nil
+		for _, p := range src.Partitions {
+			if p.Status == model.BACKUP_PARTITION_STATUS_SUCCESS {
+				req.Partitions = append(req.Partitions, p.Partition)
+			}
+		}
 	}
 
 	srcByPart := map[string]model.BackupRunPartition{}
@@ -70,6 +84,8 @@ func (s *Service) SubmitRestore(cluster string, req RestoreRequest) (string, err
 		SourceRunID:   src.RunID,
 		Native:        src.Native,
 		NativeShards:  src.NativeShards,
+		WholeTable:    req.WholeTable,
+		Replace:       req.Replace,
 		CreateTime:    now,
 	}
 	if err := s.repo.CreateRun(run); err != nil {

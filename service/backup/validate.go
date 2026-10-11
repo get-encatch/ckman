@@ -167,3 +167,21 @@ func validateNativeOptions(style string, clean, checksum bool, fullEvery int) er
 	}
 	return nil
 }
+
+// validateNativeSchedule checks the full-backup schedule and retention of a
+// native policy. FullCrontab only applies to scheduled native backups.
+func validateNativeSchedule(style, scheduleType, fullCrontab string, keepFull int) error {
+	if keepFull < 0 {
+		return fmt.Errorf("keep_full_backups must be >= 0, got %d", keepFull)
+	}
+	if fullCrontab == "" {
+		return nil
+	}
+	if style != model.BACKUP_STYLE_NATIVE || scheduleType != model.BACKUP_SCHEDULED {
+		return errors.New("full_crontab only applies to scheduled whole-table (native) backups")
+	}
+	if err := ValidateCrontabMinInterval(fullCrontab); err != nil {
+		return fmt.Errorf("invalid full backup crontab: %w", err)
+	}
+	return nil
+}

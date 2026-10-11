@@ -128,6 +128,8 @@ type BackupRequest struct {
 	Checksum       bool        `json:"checksum"`                   //是否进行md5校验
 	MaxBandwidthMB int         `json:"max_bandwidth_mb"`           //S3上传限速(MB/s)，单个任务的集群总量，按shard数均分；0不限
 	FullEvery      int         `json:"full_every"`                 //native 模式：每 N 次做一次全量，0 为默认值
+	FullCrontab    string      `json:"full_crontab"`               //native 定时：全量备份的 cron；crontab 为增量
+	KeepFull       int         `json:"keep_full"`                  //native：保留最近 N 个全量链，0 表示全部保留
 }
 
 type RestoreRequest struct {
@@ -153,6 +155,8 @@ const (
 
 	// Run trigger types
 	TRIGGER_CRON             = "cron"
+	TRIGGER_CRON_FULL        = "cron_full"   // native: the full-backup schedule fired
+	TRIGGER_MANUAL_FULL      = "manual_full" // native: "run full backup now"
 	TRIGGER_MANUAL_IMMEDIATE = "manual_immediate"
 	TRIGGER_MANUAL_RESTORE   = "manual_restore"
 	TRIGGER_RETRY            = "retry"
@@ -193,6 +197,8 @@ type BackupPolicy struct {
 	Checksum       bool        `json:"checksum"`
 	MaxBandwidthMB int         `json:"max_bandwidth_mb"` // S3 上传限速(MB/s)，集群总量；0 不限。仅 backup + S3 生效
 	FullEvery      int         `json:"full_every"`       // native: full backup every N runs; 0 = DEFAULT_NATIVE_FULL_EVERY
+	FullCrontab    string      `json:"full_crontab"`     // native scheduled: cron of full backups (crontab = incrementals)
+	KeepFull       int         `json:"keep_full"`        // native: keep the newest N full chains; 0 = keep all
 	Clean          bool        `json:"clean"`
 	Enabled        bool        `json:"enabled"`
 	Deleted        bool        `json:"deleted"`
@@ -216,6 +222,8 @@ type BackupRun struct {
 	BaseRunID     string               `json:"base_run_id,omitempty"`   // native backup: run this one is incremental on; "" = full
 	NativeShards  int                  `json:"native_shards,omitempty"` // native backup: shard count when it ran (one backup per shard)
 	SourceRunID   string               `json:"source_run_id,omitempty"` // restore: the backup run it reads from
+	WholeTable    bool                 `json:"whole_table,omitempty"`   // native restore: the whole table, no PARTITIONS clause
+	Replace       bool                 `json:"replace,omitempty"`       // restore: empty the table / drop the partitions first
 	Partitions    []BackupRunPartition `json:"partitions"`
 	StartedAt     time.Time            `json:"started_at"`
 	FinishedAt    time.Time            `json:"finished_at"`

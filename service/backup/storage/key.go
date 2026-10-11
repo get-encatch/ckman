@@ -65,3 +65,13 @@ func JoinNativeKey(storagePrefix, db, table, runID string, shard int) string {
 	}
 	return p + "/" + base
 }
+
+// JoinNativeRunPrefix is the key prefix holding every shard of one native run.
+func JoinNativeRunPrefix(storagePrefix, db, table, runID string) string {
+	base := fmt.Sprintf("native/%s.%s/%s", db, table, runID)
+	p := strings.Trim(storagePrefix, "/")
+	if p == "" {
+		return base
+	}
+	return p + "/" + base
+}

@@ -31,6 +31,8 @@ export type BackupPolicy = {
   backup_style: BackupStyle
   backup_type: "partition" | "daily"
   full_every: number
+  full_crontab: string // native scheduled: full backups; crontab = incrementals
+  keep_full: number // native: keep the newest N full chains (0 = all)
   days_before: number
   start_date: string
   range_start_date: string
@@ -65,6 +67,8 @@ export type BackupRun = {
   native?: boolean
   base_run_id?: string // native backup: built on this run; empty = full
   source_run_id?: string
+  whole_table?: boolean
+  replace?: boolean
   trigger_type: string
   instance: string
   status: RunStatus
@@ -151,7 +155,7 @@ export const nextRunQuery = (policyId: string) =>
   queryOptions({
     queryKey: ["backup-next-run", policyId],
     queryFn: () =>
-      api.get<{ next_run_at: string }>(
+      api.get<{ next_run_at: string; next_full_run_at?: string }>(
         `/api/v1/data_manage/backup/policy/${enc(policyId)}/next_run`
       ),
   })
@@ -206,6 +210,8 @@ export type BackupRequest = {
   backup_style: BackupStyle
   backup_type: "partition" | "daily"
   full_every?: number
+  full_crontab?: string
+  keep_full?: number
   partitions?: string[]
   days_before?: number
   start_date?: string
@@ -240,22 +246,30 @@ export function deletePolicy(policyId: string) {
   return api.delete(`/api/v1/data_manage/backup/policy/${enc(policyId)}`)
 }
 
-export function triggerPolicy(policyId: string) {
+// full=true starts a new full backup chain (native policies)
+export function triggerPolicy(policyId: string, full = false) {
   return api.post<{ run_id: string }>(
-    `/api/v1/data_manage/backup/policy/${enc(policyId)}/trigger`
+    `/api/v1/data_manage/backup/policy/${enc(policyId)}/trigger`,
+    undefined,
+    { full: full || undefined }
   )
 }
 
+// wholeTable (native backups): the whole table; replace: empty the table or
+// drop the chosen partitions before restoring.
 export function restoreFromRun(
   cluster: string,
   sourceRunId: string,
-  partitions: string[]
+  partitions: string[],
+  opts: { wholeTable?: boolean; replace?: boolean } = {}
 ) {
   return api.post<{ run_id: string }>(
     `/api/v1/data_manage/restore/${enc(cluster)}`,
     {
       source_run_id: sourceRunId,
       partitions,
+      whole_table: opts.wholeTable,
+      replace: opts.replace,
     }
   )
 }
@@ -368,7 +382,9 @@ export function rebalanceExecute(cluster: string, body: RebalanceRequest) {
 // Short description of what a policy copies.
 export function describeMode(p: BackupPolicy) {
   if (p.backup_style === "native")
-    return `Whole table, incremental (full every ${p.full_every || 7})`
+    return p.full_crontab
+      ? "Whole table, full + incremental"
+      : `Whole table, incremental (full every ${p.full_every || 7})`
   if (p.backup_style === "full") return "Every partition"
   if (p.backup_type === "daily")
     return `New day partitions, ${p.days_before}d back`
@@ -378,3 +394,7 @@ export function describeMode(p: BackupPolicy) {
 // The partition of an unpartitioned table is called tuple().
 export const partitionLabel = (name: string) =>
   name === "tuple()" ? "whole table" : name
+
+// Successful whole-table backups, newest first: what can be restored.
+export const isRestorableNative = (r: BackupRun) =>
+  r.native === true && r.operation === "backup" && r.status === "success"

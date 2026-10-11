@@ -61,6 +61,9 @@ type Executor struct {
 	partitionIDs         func(c *shardConn, db, table string) (map[string]string, error)          // partition name -> partition_id
 	nativeInventory      func(c *shardConn, db, table string) ([]model.BackupRunPartition, error) // active partitions with totals
 	policyRuns           func(policyID string) ([]model.BackupRun, error)                         // newest first
+	deleteRun            func(runID string) error                                                 // retention
+	tableExists          func(host, db, table string) (bool, error)                               // restore pre-check
+	hosts                []string                                                                 // every replica of the cluster (local-storage cleanup)
 	stages               stages
 	now                  func() time.Time
 
@@ -179,6 +182,11 @@ func (e *Executor) Init(ctx context.Context, runID string) error {
 		cluster, cerr := repository.Ps.GetClusterbyName(policy.ClusterName)
 		if cerr != nil {
 			return fmt.Errorf("get cluster %s: %w", policy.ClusterName, cerr)
+		}
+		for _, sh := range cluster.Shards {
+			for _, rep := range sh.Replicas {
+				e.hosts = append(e.hosts, rep.Ip)
+			}
 		}
 		resolved, rerr := ResolvePolicyTarget(policy)
 		if rerr != nil {
@@ -514,6 +522,16 @@ func (realStages) Restore(ctx context.Context, e *Executor, runID string) error 
 		for _, c := range e.conns {
 			c := c
 			go func() {
+				if run.Replace {
+					clause := storage.PartitionClause(p.Partition, p.PartitionID)
+					if clause == "" {
+						clause = " PARTITION ID 'all'"
+					}
+					if err := e.execSQL(c.host, fmt.Sprintf("ALTER TABLE `%s`.`%s` DROP%s", run.Database, run.Table, clause)); err != nil {
+						ch <- result{c.host, fmt.Errorf("drop before restore: %w", err)}
+						return
+					}
+				}
 				key := storage.JoinRunKey(run.StoragePrefix, p.KeySegment(), run.Database, run.Table, c.host)
 				sql := fmt.Sprintf("RESTORE TABLE `%s`.`%s`%s SETTINGS allow_non_empty_tables=true",
 					run.Database, run.Table,
