@@ -18,10 +18,10 @@ GCFLAGS=-gcflags "all=-N -l"
 PUB_KEY=$(shell cat resources/eoi_public_key.pub 2>/dev/null)
 export GOPROXY=https://goproxy.cn,direct
 
-# frontend：按 submodule HEAD SHA 做 stamp。SHA 没变就跳过编译，省 30-60s+。
-# 想强制重编：make frontend-force（bump submodule 也会自动失效 stamp）。
-FRONTEND_SHA := $(shell git -C frontend rev-parse HEAD 2>/dev/null || echo unknown)
-FRONTEND_STAMP := static/dist/.frontend.$(FRONTEND_SHA)
+# frontend: the get-encatch React UI in web/ (see FORK.md). Skipped when nothing
+# under web/ changed; force a rebuild with `make frontend-force`.
+WEB_SRC := $(shell find web -type f -not -path 'web/node_modules/*' -not -path 'web/dist/*' 2>/dev/null)
+FRONTEND_STAMP := static/dist/.frontend.stamp
 
 .PHONY: help
 help: ## 列出所有可用目标
@@ -32,13 +32,15 @@ help: ## 列出所有可用目标
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
 
 .PHONY: frontend
-frontend: $(FRONTEND_STAMP) ## 编译前端(SHA 没变则跳过)
+frontend: $(FRONTEND_STAMP) ## 编译前端 web/(没变则跳过)
 
-$(FRONTEND_STAMP):
-	@echo "==> building frontend ($(FRONTEND_SHA))"
+$(FRONTEND_STAMP): $(WEB_SRC)
+	@echo "==> building frontend (web/)"
 	@rm -rf static/dist/.frontend.* static/dist/index.html static/dist/assets static/dist/static static/dist/favicon.ico
-	@make -C frontend build
-	@cp -r frontend/dist/. static/dist/
+	@cd web && (test -d node_modules || npm ci --no-audit --no-fund)
+	@cd web && npm run build
+	@mkdir -p static/dist
+	@cp -r web/dist/. static/dist/
 	@touch $@
 
 .PHONY: frontend-force

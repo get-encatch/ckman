@@ -22,3 +22,6 @@ coverage.txt
 node_modules
 yarn.lock
 .superpowers/
+
+# get-encatch deploy script output
+/build/
