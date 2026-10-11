@@ -6,6 +6,7 @@ func GuestPolicies() []Policy {
 		{"/ck/cluster/*", GET},
 		{"/ck/table/*", GET},
 		{"/ck/table/group_uniq_array/*", GET},
+		{"/ck/table/unreplicated/*", GET},
 		{"/ck/query/*", GET},
 		{"/ck/query_explain/*", GET},
 		{"/ck/query_export/*", GET},

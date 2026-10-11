@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react"
+import { useQuery } from "@tanstack/react-query"
 
 import { errorMessage } from "@/api/client"
-import type { NodeInfo } from "@/api/queries"
+import { unreplicatedTablesQuery, type NodeInfo } from "@/api/queries"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -58,6 +59,11 @@ export function AddNodesDialog({
   const [busy, setBusy] = useState(false)
 
   const newShard = Number(shard) === shardCount + 1
+  const unreplicated = useQuery({
+    ...unreplicatedTablesQuery(cluster),
+    enabled: open && !newShard,
+  })
+  const notCopied = newShard ? [] : (unreplicated.data ?? [])
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -145,8 +151,24 @@ export function AddNodesDialog({
               <FieldDescription>
                 {newShard
                   ? "A new shard starts empty: new inserts spread to it, existing rows stay where they are until you rebalance."
-                  : "Replicas copy the shard's existing data from their peers automatically."}
+                  : "Replicas copy the shard's replicated tables from their peers automatically."}
               </FieldDescription>
+              {notCopied.length > 0 && (
+                <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                  {notCopied.length} table
+                  {notCopied.length === 1 ? " isn't" : "s aren't"} replicated
+                  and won't be copied:{" "}
+                  <span className="font-mono">
+                    {notCopied
+                      .slice(0, 5)
+                      .map((t) => `${t.database}.${t.table}`)
+                      .join(", ")}
+                    {notCopied.length > 5 ? ", …" : ""}
+                  </span>
+                  . The new replica gets empty copies. Convert them on Tables →
+                  Replication (no restart) and the replica fills itself.
+                </p>
+              )}
             </Field>
             <Field>
               <FieldLabel>Copy table definitions from</FieldLabel>
