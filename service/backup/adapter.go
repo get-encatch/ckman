@@ -217,6 +217,7 @@ func newRealExecutor(repo ExecRepo, chAdapter *ClickHouseAdapter) *Executor {
 		policyRuns: func(policyID string) ([]model.BackupRun, error) {
 			return repository.Ps.GetRunsByPolicy(policyID, 0, time.Time{})
 		},
+		deleteRun:             func(runID string) error { return repository.Ps.DeleteBackupRun(runID) },
 		collectChecksumOnHost: chAdapter.CollectChecksumOnHost,
 		stages:                realStages{},
 	}
@@ -229,6 +230,26 @@ func newRealExecutor(repo ExecRepo, chAdapter *ClickHouseAdapter) *Executor {
 			}
 		}
 		return fmt.Errorf("no conn for host %s", host)
+	}
+
+	e.tableExists = func(host, db, table string) (bool, error) {
+		for _, c := range e.conns {
+			if c.host == host && c.conn != nil {
+				rows, err := c.conn.Query(fmt.Sprintf("EXISTS TABLE `%s`.`%s`", db, table))
+				if err != nil {
+					return false, err
+				}
+				defer rows.Close()
+				var n uint8
+				if rows.Next() {
+					if err := rows.Scan(&n); err != nil {
+						return false, err
+					}
+				}
+				return n == 1, nil
+			}
+		}
+		return false, fmt.Errorf("no conn for host %s", host)
 	}
 
 	// queryRows hook：从本实例 e.conns 按 host 找 conn 直接调 Query
@@ -309,8 +330,18 @@ func Init(ctx context.Context, self string, maxConcurrent int, chAdapter *ClickH
 	pool.Start(ctx)
 
 	sched := NewScheduler(self, ServiceCronAdapter{}, PolicyRepoAdapter{}, func(p model.BackupPolicy) {
+		// The full schedule wins when both fire together; otherwise the
+		// incremental would hold the policy and the full run be skipped.
+		if FullBackupDueNow(p, time.Now()) {
+			log.Logger.Infof("[backup] policy=%s: full backup due now, skipping incremental", p.PolicyID)
+			return
+		}
 		if _, err := svc.SubmitForPolicy(p, model.TRIGGER_CRON); err != nil {
 			log.Logger.Errorf("[backup] cron submit policy=%s: %v", p.PolicyID, err)
+		}
+	}).WithFull(func(p model.BackupPolicy) {
+		if _, err := svc.SubmitForPolicy(p, model.TRIGGER_CRON_FULL); err != nil {
+			log.Logger.Errorf("[backup] cron full submit policy=%s: %v", p.PolicyID, err)
 		}
 	})
 	sched.Start(ctx)

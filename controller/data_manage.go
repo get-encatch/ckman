@@ -190,10 +190,15 @@ func (c *DataManageController) GetPolicyNextRun(ctx *gin.Context) {
 		c.wrapfunc(ctx, model.E_DATA_SELECT_FAILED, err)
 		return
 	}
-	resp := gin.H{"next_run_at": ""}
+	resp := gin.H{"next_run_at": "", "next_full_run_at": ""}
 	if p.ScheduleType == model.BACKUP_SCHEDULED && p.Enabled && !p.Deleted {
 		if next, err := backup.NextRunAfter(p.Crontab, time.Now()); err == nil {
 			resp["next_run_at"] = next.Format(time.RFC3339)
+		}
+		if p.FullCrontab != "" {
+			if next, err := backup.NextRunAfter(p.FullCrontab, time.Now()); err == nil {
+				resp["next_full_run_at"] = next.Format(time.RFC3339)
+			}
 		}
 	}
 	c.wrapfunc(ctx, model.E_SUCCESS, resp)
@@ -207,7 +212,7 @@ func (c *DataManageController) TriggerPolicy(ctx *gin.Context) {
 	if svc == nil {
 		return
 	}
-	runID, err := svc.TriggerPolicy(pid)
+	runID, err := svc.TriggerPolicy(pid, ctx.Query("full") == "true")
 	if err != nil {
 		c.wrapfunc(ctx, model.E_DATA_INSERT_FAILED, err)
 		return

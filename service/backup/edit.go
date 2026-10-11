@@ -32,6 +32,9 @@ func (s *Service) UpdatePolicy(p model.BackupPolicy) error {
 	if err := validateNativeOptions(p.BackupStyle, p.Clean, p.Checksum, p.FullEvery); err != nil {
 		return err
 	}
+	if err := validateNativeSchedule(p.BackupStyle, p.ScheduleType, p.FullCrontab, p.KeepFull); err != nil {
+		return err
+	}
 	if err := validateDailyRange(p.ScheduleType, p.BackupStyle, p.BackupType, p.StartDate, p.RangeStartDate, p.RangeEndDate, p.DaysBefore); err != nil {
 		return err
 	}
@@ -91,11 +94,15 @@ func (s *Service) DeleteRun(runID string) error {
 	return s.repo.DeleteRun(runID)
 }
 
-// TriggerPolicy 立即触发一次 run（不论 schedule_type）
-func (s *Service) TriggerPolicy(policyID string) (string, error) {
+// TriggerPolicy 立即触发一次 run（不论 schedule_type）。full=true 时 native
+// 策略做一次全量（开启新链），否则按常规（增量）执行。
+func (s *Service) TriggerPolicy(policyID string, full bool) (string, error) {
 	p, err := s.repo.GetPolicy(policyID)
 	if err != nil {
 		return "", err
+	}
+	if full && p.BackupStyle == model.BACKUP_STYLE_NATIVE {
+		return s.SubmitForPolicy(p, model.TRIGGER_MANUAL_FULL)
 	}
 	return s.SubmitForPolicy(p, model.TRIGGER_MANUAL_IMMEDIATE)
 }

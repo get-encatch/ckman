@@ -211,7 +211,7 @@ func TestTriggerPolicy_CreatesRun(t *testing.T) {
 	}
 	pool := &fakePool{}
 	svc := newServiceForTest("ckman-01", repo, pool)
-	runID, err := svc.TriggerPolicy("p1")
+	runID, err := svc.TriggerPolicy("p1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
