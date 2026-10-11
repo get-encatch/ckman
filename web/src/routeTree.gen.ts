@@ -18,6 +18,8 @@ import { Route as AppUsersRouteImport } from './routes/_app/users'
 import { Route as AppClustersIndexRouteImport } from './routes/_app/clusters/index'
 import { Route as AppClustersClusterRouteImport } from './routes/_app/clusters/$cluster'
 import { Route as AppClustersNewRouteImport } from './routes/_app/clusters/new'
+import { Route as AppMachinesIndexRouteImport } from './routes/_app/machines/index'
+import { Route as AppMachinesMachineIdRouteImport } from './routes/_app/machines/$machineId'
 import { Route as AppTasksIndexRouteImport } from './routes/_app/tasks/index'
 import { Route as AppTasksTaskIdRouteImport } from './routes/_app/tasks/$taskId'
 import { Route as AppClustersClusterIndexRouteImport } from './routes/_app/clusters/$cluster/index'
@@ -71,6 +73,16 @@ const AppClustersClusterRoute = AppClustersClusterRouteImport.update({
 const AppClustersNewRoute = AppClustersNewRouteImport.update({
   id: '/clusters/new',
   path: '/clusters/new',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppMachinesIndexRoute = AppMachinesIndexRouteImport.update({
+  id: '/machines/',
+  path: '/machines/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppMachinesMachineIdRoute = AppMachinesMachineIdRouteImport.update({
+  id: '/machines/$machineId',
+  path: '/machines/$machineId',
   getParentRoute: () => AppRoute,
 } as any)
 const AppTasksIndexRoute = AppTasksIndexRouteImport.update({
@@ -137,8 +149,10 @@ export interface FileRoutesByFullPath {
   '/users': typeof AppUsersRoute
   '/clusters/$cluster': typeof AppClustersClusterRouteWithChildren
   '/clusters/new': typeof AppClustersNewRoute
+  '/machines/$machineId': typeof AppMachinesMachineIdRoute
   '/tasks/$taskId': typeof AppTasksTaskIdRoute
   '/clusters/': typeof AppClustersIndexRoute
+  '/machines/': typeof AppMachinesIndexRoute
   '/tasks/': typeof AppTasksIndexRoute
   '/clusters/$cluster/backups': typeof AppClustersClusterBackupsRoute
   '/clusters/$cluster/nodes': typeof AppClustersClusterNodesRoute
@@ -156,8 +170,10 @@ export interface FileRoutesByTo {
   '/users': typeof AppUsersRoute
   '/': typeof AppIndexRoute
   '/clusters/new': typeof AppClustersNewRoute
+  '/machines/$machineId': typeof AppMachinesMachineIdRoute
   '/tasks/$taskId': typeof AppTasksTaskIdRoute
   '/clusters': typeof AppClustersIndexRoute
+  '/machines': typeof AppMachinesIndexRoute
   '/tasks': typeof AppTasksIndexRoute
   '/clusters/$cluster/backups': typeof AppClustersClusterBackupsRoute
   '/clusters/$cluster/nodes': typeof AppClustersClusterNodesRoute
@@ -178,8 +194,10 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/clusters/$cluster': typeof AppClustersClusterRouteWithChildren
   '/_app/clusters/new': typeof AppClustersNewRoute
+  '/_app/machines/$machineId': typeof AppMachinesMachineIdRoute
   '/_app/tasks/$taskId': typeof AppTasksTaskIdRoute
   '/_app/clusters/': typeof AppClustersIndexRoute
+  '/_app/machines/': typeof AppMachinesIndexRoute
   '/_app/tasks/': typeof AppTasksIndexRoute
   '/_app/clusters/$cluster/backups': typeof AppClustersClusterBackupsRoute
   '/_app/clusters/$cluster/nodes': typeof AppClustersClusterNodesRoute
@@ -200,8 +218,10 @@ export interface FileRouteTypes {
     | '/users'
     | '/clusters/$cluster'
     | '/clusters/new'
+    | '/machines/$machineId'
     | '/tasks/$taskId'
     | '/clusters/'
+    | '/machines/'
     | '/tasks/'
     | '/clusters/$cluster/backups'
     | '/clusters/$cluster/nodes'
@@ -219,8 +239,10 @@ export interface FileRouteTypes {
     | '/users'
     | '/'
     | '/clusters/new'
+    | '/machines/$machineId'
     | '/tasks/$taskId'
     | '/clusters'
+    | '/machines'
     | '/tasks'
     | '/clusters/$cluster/backups'
     | '/clusters/$cluster/nodes'
@@ -240,8 +262,10 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/clusters/$cluster'
     | '/_app/clusters/new'
+    | '/_app/machines/$machineId'
     | '/_app/tasks/$taskId'
     | '/_app/clusters/'
+    | '/_app/machines/'
     | '/_app/tasks/'
     | '/_app/clusters/$cluster/backups'
     | '/_app/clusters/$cluster/nodes'
@@ -321,6 +345,20 @@ declare module '@tanstack/react-router' {
       path: '/clusters/new'
       fullPath: '/clusters/new'
       preLoaderRoute: typeof AppClustersNewRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/machines/': {
+      id: '/_app/machines/'
+      path: '/machines'
+      fullPath: '/machines/'
+      preLoaderRoute: typeof AppMachinesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/machines/$machineId': {
+      id: '/_app/machines/$machineId'
+      path: '/machines/$machineId'
+      fullPath: '/machines/$machineId'
+      preLoaderRoute: typeof AppMachinesMachineIdRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/tasks/': {
@@ -428,8 +466,10 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppClustersClusterRoute: typeof AppClustersClusterRouteWithChildren
   AppClustersNewRoute: typeof AppClustersNewRoute
+  AppMachinesMachineIdRoute: typeof AppMachinesMachineIdRoute
   AppTasksTaskIdRoute: typeof AppTasksTaskIdRoute
   AppClustersIndexRoute: typeof AppClustersIndexRoute
+  AppMachinesIndexRoute: typeof AppMachinesIndexRoute
   AppTasksIndexRoute: typeof AppTasksIndexRoute
 }
 
@@ -440,8 +480,10 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppClustersClusterRoute: AppClustersClusterRouteWithChildren,
   AppClustersNewRoute: AppClustersNewRoute,
+  AppMachinesMachineIdRoute: AppMachinesMachineIdRoute,
   AppTasksTaskIdRoute: AppTasksTaskIdRoute,
   AppClustersIndexRoute: AppClustersIndexRoute,
+  AppMachinesIndexRoute: AppMachinesIndexRoute,
   AppTasksIndexRoute: AppTasksIndexRoute,
 }
 

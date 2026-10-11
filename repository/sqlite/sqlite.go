@@ -83,6 +83,7 @@ func (sp *SQLitePersistent) Init(cfgIn interface{}) error {
 		&TblMeta{},
 		&TblUser{},
 		&TblStorageConnection{},
+		&TblFleetObject{},
 	); err != nil {
 		return errors.Wrap(err, "")
 	}

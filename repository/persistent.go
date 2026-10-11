@@ -113,6 +113,15 @@ type PersistentStorageConnectionService interface {
 	GetAllStorageConnections() ([]model.StorageConnection, error)
 }
 
+// PersistentFleetService stores fleet objects (machines, standbys, settings)
+// as JSON documents keyed by kind and id.
+type PersistentFleetService interface {
+	PutFleetObject(kind, id, name string, body []byte) error
+	GetFleetObject(kind, id string) ([]byte, error)
+	ListFleetObjects(kind string) ([][]byte, error)
+	DeleteFleetObject(kind, id string) error
+}
+
 type PersistentUserService interface {
 	GetUserByName(username string) (model.CkmanUser, error)
 	UserExists(username string) bool
@@ -133,6 +142,7 @@ type PersistentMgr interface {
 	PersistentBackupRunService        // 新增
 	PersistentUserService             // 新增 — Phase 1 用户管理
 	PersistentStorageConnectionService
+	PersistentFleetService
 }
 
 func RegistePersistent(fn func() PersistentFactory) {

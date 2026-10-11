@@ -901,3 +901,23 @@ func (lp *LocalPersistent) GetStorageConnection(string) (model.StorageConnection
 func (lp *LocalPersistent) GetAllStorageConnections() ([]model.StorageConnection, error) {
 	return []model.StorageConnection{}, nil
 }
+
+// ─── Fleet objects ───────────────────────────────────────────────────────────
+// Like users and storage connections, the fleet needs a database-backed
+// persistent_policy.
+
+var errFleetUnsupported = errors.New("the machine fleet needs a database-backed persistent_policy")
+
+func (lp *LocalPersistent) PutFleetObject(string, string, string, []byte) error {
+	return errFleetUnsupported
+}
+
+func (lp *LocalPersistent) GetFleetObject(string, string) ([]byte, error) {
+	return nil, repository.ErrRecordNotFound
+}
+
+func (lp *LocalPersistent) ListFleetObjects(string) ([][]byte, error) { return [][]byte{}, nil }
+
+func (lp *LocalPersistent) DeleteFleetObject(string, string) error {
+	return repository.ErrRecordNotFound
+}

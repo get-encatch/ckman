@@ -187,6 +187,16 @@ func InitRouterV1(groupV1 *gin.RouterGroup, config *config.CKManConfig, signal c
 	groupV1.POST(fmt.Sprintf("/data_manage/backup/table/:%s/:database/:table/partitions/delete", controller.ClickHouseClusterPath), dataManageController.DeletePartitionRecords)
 	groupV1.GET(fmt.Sprintf("/data_manage/disks/:%s", controller.ClickHouseClusterPath), dataManageController.GetClusterDisks)
 
+	fleetController := controller.NewFleetController(WrapMsg)
+	groupV1.GET("/fleet/machines", fleetController.ListMachines)
+	groupV1.POST("/fleet/machines", fleetController.CreateMachine)
+	groupV1.GET("/fleet/machine/:id", fleetController.GetMachine)
+	groupV1.PUT("/fleet/machine/:id", fleetController.UpdateMachine)
+	groupV1.DELETE("/fleet/machine/:id", fleetController.DeleteMachine)
+	groupV1.POST("/fleet/machine/:id/check", fleetController.CheckMachine)
+	groupV1.GET("/fleet/machine/:id/stats", fleetController.MachineStats)
+	groupV1.GET("/fleet/stats", fleetController.FleetStats)
+
 	storageConnController := controller.NewStorageConnectionController(WrapMsg)
 	groupV1.GET("/storage/connections", storageConnController.List)
 	groupV1.POST("/storage/connections", storageConnController.Create)
