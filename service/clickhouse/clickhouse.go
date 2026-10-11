@@ -209,6 +209,20 @@ func getNodeInfo(service *CkService) (string, string, string, string) {
 	return fmt.Sprintf("%s/%s", usedSpace, totalSpace), common.FormatReadableTime(uptime), cpu, memory
 }
 
+// getNodeData is the size of ClickHouse's active parts on one node. Disk usage
+// covers the whole volume, which servers sharing a disk (VMs, containers)
+// report identically.
+func getNodeData(service *CkService) string {
+	value, err := service.QueryInfo("SELECT formatReadableSize(sum(bytes_on_disk)) FROM system.parts WHERE active")
+	if err != nil || len(value) < 2 {
+		return "NA"
+	}
+	if s, ok := value[1][0].(string); ok {
+		return s
+	}
+	return "NA"
+}
+
 func GetCkClusterStatus(conf *model.CKManClickHouseConfig) []model.CkClusterNode {
 	index := 0
 	statusList := make([]model.CkClusterNode, len(conf.Hosts))
@@ -217,6 +231,7 @@ func GetCkClusterStatus(conf *model.CKManClickHouseConfig) []model.CkClusterNode
 	uptimeMap := make(map[string]string, len(conf.Hosts))
 	cpuMap := make(map[string]string, len(conf.Hosts))
 	memoryMap := make(map[string]string, len(conf.Hosts))
+	dataMap := make(map[string]string, len(conf.Hosts))
 	var lock sync.RWMutex
 	var wg sync.WaitGroup
 	for _, host := range conf.Hosts {
@@ -237,6 +252,7 @@ func GetCkClusterStatus(conf *model.CKManClickHouseConfig) []model.CkClusterNode
 				lock.Lock()
 				statusMap[innerHost] = model.CkStatusGreen
 				diskMap[innerHost], uptimeMap[innerHost], cpuMap[innerHost], memoryMap[innerHost] = getNodeInfo(service)
+				dataMap[innerHost] = getNodeData(service)
 				lock.Unlock()
 			}
 		})
@@ -251,6 +267,7 @@ func GetCkClusterStatus(conf *model.CKManClickHouseConfig) []model.CkClusterNode
 				ReplicaNumber: j + 1,
 				Status:        statusMap[replica.Ip],
 				Disk:          diskMap[replica.Ip],
+				Data:          dataMap[replica.Ip],
 				Uptime:        uptimeMap[replica.Ip],
 				Cpu:           cpuMap[replica.Ip],
 				Memory:        memoryMap[replica.Ip],

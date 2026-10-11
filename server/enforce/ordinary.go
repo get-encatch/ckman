@@ -9,6 +9,7 @@ func OrdinaryPolicies() []Policy {
 		{"/ck/truncate_table/*", DELETE},
 		{"/ck/table/ttl/*", PUT},
 		{"/ck/table/readonly/*", PUT},
+		{"/ck/table/convert_replicated/*", POST},
 		{"/ck/table/view/*", PUT},
 		{"/ck/table/orderby/*", PUT},
 		{"/ck/table/group_uniq_array/*", POST},

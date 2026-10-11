@@ -141,3 +141,15 @@ func (controller *ZookeeperController) GetReplicatedTableStatus(c *gin.Context) 
 	}
 	controller.wrapfunc(c, model.E_SUCCESS, rts)
 }
+
+// GetKeeperHostStats returns CPU, memory and disk of each ClickHouse Keeper
+// server, read over SSH. GET /zk/host_stats/{clusterName}
+func (controller *ZookeeperController) GetKeeperHostStats(c *gin.Context) {
+	clusterName := c.Param(ClickHouseClusterPath)
+	conf, err := repository.Ps.GetClusterbyName(clusterName)
+	if err != nil {
+		controller.wrapfunc(c, model.E_RECORD_NOT_FOUND, fmt.Sprintf("cluster %s does not exist", clusterName))
+		return
+	}
+	controller.wrapfunc(c, model.E_SUCCESS, zookeeper.GetKeeperHostStats(&conf))
+}

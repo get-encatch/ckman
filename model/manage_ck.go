@@ -23,6 +23,7 @@ type CkClusterNode struct {
 	ShardNumber   int    `json:"shardNumber"`
 	ReplicaNumber int    `json:"replicaNumber"`
 	Disk          string `json:"disk"`
+	Data          string `json:"data"` // ClickHouse's own parts on this node; Disk is the whole volume
 	Uptime        string `json:"uptime"`
 	Cpu           string `json:"cpu"`
 	Memory        string `json:"memory"`

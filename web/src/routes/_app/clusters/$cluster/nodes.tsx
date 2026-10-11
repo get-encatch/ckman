@@ -15,6 +15,7 @@ import {
   clusterStatusQuery,
   deleteNode,
   packagesQuery,
+  restartNode,
   startNode,
   stopNode,
   upgradeCluster,
@@ -67,7 +68,9 @@ function NodesPage() {
   const deployed = config.data?.mode !== "import"
   const canManage = isAdmin && deployed
 
-  const [pending, setPending] = useState<Record<string, "start" | "stop">>({})
+  const [pending, setPending] = useState<
+    Record<string, "start" | "stop" | "restart">
+  >({})
   const [logNode, setLogNode] = useState<string | null>(null)
   const [overrideNode, setOverrideNode] = useState<string | null>(null)
   const [removeNode, setRemoveNode] = useState<NodeInfo | null>(null)
@@ -77,17 +80,19 @@ function NodesPage() {
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: ["cluster", cluster] })
 
-  async function toggle(node: NodeInfo, action: "start" | "stop") {
+  async function toggle(node: NodeInfo, action: "start" | "stop" | "restart") {
     setPending((p) => ({ ...p, [node.ip]: action }))
     try {
       const done = await ssh.withSsh((p) =>
         action === "start"
           ? startNode(cluster, node.ip, p)
-          : stopNode(cluster, node.ip, p)
+          : action === "stop"
+            ? stopNode(cluster, node.ip, p)
+            : restartNode(cluster, node.ip, p)
       )
       if (done !== undefined)
         toast.success(
-          `${action === "start" ? "Started" : "Stopped"} ${node.ip}`
+          `${{ start: "Started", stop: "Stopped", restart: "Restarted" }[action]} ${node.ip}`
         )
     } catch (err) {
       toast.error(errorMessage(err))
@@ -126,9 +131,13 @@ function NodesPage() {
           pending[c.row.original.ip] ? (
             <span className="flex items-center gap-2 text-sm text-muted-foreground">
               <Spinner className="size-3.5" />
-              {pending[c.row.original.ip] === "start"
-                ? "Starting…"
-                : "Stopping…"}
+              {
+                {
+                  start: "Starting…",
+                  stop: "Stopping…",
+                  restart: "Restarting…",
+                }[pending[c.row.original.ip]]
+              }
             </span>
           ) : (
             <div className="flex flex-col gap-0.5">
@@ -156,8 +165,15 @@ function NodesPage() {
           />
         ),
       }),
+      col.accessor("data", {
+        header: "Data",
+        enableSorting: false,
+        cell: (c) => (
+          <span className="tabular-nums">{c.getValue() ?? "—"}</span>
+        ),
+      }),
       col.accessor("disk", {
-        header: "Disk",
+        header: "Disk (volume)",
         enableSorting: false,
         cell: (c) => (
           <UsageBar
@@ -209,11 +225,18 @@ function NodesPage() {
                     <>
                       <DropdownMenuSeparator />
                       {n.status === "green" ? (
-                        <DropdownMenuItem
-                          onClick={() => void toggle(n, "stop")}
-                        >
-                          Stop node
-                        </DropdownMenuItem>
+                        <>
+                          <DropdownMenuItem
+                            onClick={() => void toggle(n, "restart")}
+                          >
+                            Restart node
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => void toggle(n, "stop")}
+                          >
+                            Stop node
+                          </DropdownMenuItem>
+                        </>
                       ) : (
                         <DropdownMenuItem
                           onClick={() => void toggle(n, "start")}
@@ -250,7 +273,7 @@ function NodesPage() {
     <PageBody>
       <Section
         title="Nodes"
-        description="ClickHouse servers in this cluster, grouped as shards and replicas."
+        description="ClickHouse servers in this cluster, grouped as shards and replicas. Data is what ClickHouse stores on each node; Disk is the whole volume, so servers sharing a disk show the same figure."
         actions={
           canManage && (
             <Button size="sm" onClick={() => setAddOpen(true)}>
