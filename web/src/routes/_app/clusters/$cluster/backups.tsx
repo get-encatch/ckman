@@ -17,6 +17,7 @@ import {
   updatePolicy,
   type BackupTask,
 } from "@/api/data-manage"
+import { connectionsQuery } from "@/api/storage"
 import { BackupFormDialog } from "@/components/app/backup-form-dialog"
 import { BackupTaskSheet } from "@/components/app/backup-task-sheet"
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
@@ -50,6 +51,14 @@ function BackupsPage() {
     ...backupPoliciesQuery(cluster),
     refetchInterval: 10_000,
   })
+  const connections = useQuery(connectionsQuery())
+  const connectionNames = useMemo(
+    () =>
+      Object.fromEntries(
+        (connections.data ?? []).map((c) => [c.connection_id, c.name])
+      ),
+    [connections.data]
+  )
   const queue = useQuery({
     ...backupQueueQuery(cluster),
     refetchInterval: 5000,
@@ -160,7 +169,9 @@ function BackupsPage() {
         cell: (c) => {
           const p = c.row.original.policies[0]
           return p.target_type === "s3"
-            ? `S3 · ${p.s3?.Bucket}`
+            ? p.connection_id
+              ? `${connectionNames[p.connection_id] ?? "S3 connection"} · ${p.s3?.Bucket}`
+              : `S3 · ${p.s3?.Bucket}`
             : `Local · ${p.local?.path}`
         },
       }),
@@ -243,7 +254,7 @@ function BackupsPage() {
       }),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [latestByTask, canWrite]
+    [latestByTask, canWrite, connectionNames]
   )
 
   const viewingTask = tasks.find((t) => t.id === viewing) ?? null

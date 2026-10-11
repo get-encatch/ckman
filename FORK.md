@@ -93,6 +93,7 @@ Layout:
 | `src/api/queries.ts` | clusters, nodes, deploy, settings, tasks, packages, users |
 | `src/api/observability.ts` | tables, partitions, replication, sessions, query console, metrics, Keeper |
 | `src/api/data-manage.ts` | backup/restore, rebalance |
+| `src/api/storage.ts` | saved S3 connections and buckets (Storage page) |
 | `src/routes/_app/clusters/$cluster/*` | one file per cluster tab |
 | `src/components/app/` | app components (tables, dialogs, sheets, charts) |
 

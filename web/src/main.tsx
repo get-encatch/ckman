@@ -37,6 +37,8 @@ declare module "@tanstack/react-router" {
 
 setUnauthorizedHandler(() => {
   queryClient.clear()
+  // several requests can expire at once; only redirect the first time
+  if (router.state.location.pathname === "/login") return
   void router.navigate({
     to: "/login",
     search: { redirect: router.state.location.href },

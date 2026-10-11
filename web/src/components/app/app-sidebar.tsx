@@ -3,6 +3,7 @@ import { Link, useNavigate, useRouteContext } from "@tanstack/react-router"
 import {
   ChevronsUpDownIcon,
   DatabaseIcon,
+  HardDriveIcon,
   KeyRoundIcon,
   ListChecksIcon,
   LogOutIcon,
@@ -111,9 +112,18 @@ export function AppSidebar() {
               />
             </SidebarMenuItem>
             {isAdmin && (
-              <SidebarMenuItem>
-                <NavButton to="/users" icon={<UsersIcon />} label="Users" />
-              </SidebarMenuItem>
+              <>
+                <SidebarMenuItem>
+                  <NavButton
+                    to="/storage"
+                    icon={<HardDriveIcon />}
+                    label="Storage"
+                  />
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <NavButton to="/users" icon={<UsersIcon />} label="Users" />
+                </SidebarMenuItem>
+              </>
             )}
           </SidebarMenu>
         </SidebarGroup>
@@ -131,7 +141,7 @@ function NavButton({
   icon,
   label,
 }: {
-  to: "/clusters" | "/tasks" | "/packages" | "/users"
+  to: "/clusters" | "/tasks" | "/packages" | "/storage" | "/users"
   icon: React.ReactNode
   label: string
 }) {

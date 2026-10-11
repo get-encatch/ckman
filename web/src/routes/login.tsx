@@ -20,7 +20,13 @@ import {
 import { Input } from "@/components/ui/input"
 
 export const Route = createFileRoute("/login")({
-  validateSearch: z.object({ redirect: z.string().optional() }),
+  validateSearch: z.object({
+    // never bounce back to /login itself
+    redirect: z
+      .string()
+      .optional()
+      .transform((r) => (r && !r.startsWith("/login") ? r : undefined)),
+  }),
   beforeLoad: ({ search }) => {
     if (getSession()) throw redirect({ to: search.redirect ?? "/clusters" })
   },
