@@ -66,3 +66,35 @@ func TestStagingEngine(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalDDL(t *testing.T) {
+	p := normalDDL("CREATE TABLE demo.events UUID '1b2c-3d' (`ts` DateTime) ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/demo/events', '{replica}', ts) ORDER BY ts", "c")
+	s := normalDDL("CREATE TABLE demo.events (`ts` DateTime) ENGINE = ReplicatedReplacingMergeTree('/other/path', 'r1', ts) ORDER BY ts", "c_dr")
+	if p != s {
+		t.Errorf("normalDDL differs:\n%q\n%q", p, s)
+	}
+	d1 := normalDDL("CREATE TABLE demo.all (`ts` DateTime) ENGINE = Distributed('c', 'demo', 'events')", "c")
+	d2 := normalDDL("CREATE TABLE demo.all (`ts` DateTime) ENGINE = Distributed('c_dr', 'demo', 'events')", "c_dr")
+	if d1 != d2 {
+		t.Errorf("Distributed differs:\n%q\n%q", d1, d2)
+	}
+}
+
+func TestRebuildDDL(t *testing.T) {
+	got := rebuildDDL("CREATE TABLE demo.events (`ts` DateTime) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/demo/events', '{replica}') ORDER BY ts", "__ckf_rebuild_events", "ckf_x")
+	want := "CREATE TABLE demo.`__ckf_rebuild_events` (`ts` DateTime) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/demo/events/ckf_x', '{replica}') ORDER BY ts"
+	if got != want {
+		t.Errorf("rebuildDDL\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestSplitEngine(t *testing.T) {
+	ttl, s := splitEngine("ReplicatedMergeTree('/p', '{replica}') PARTITION BY toYYYYMM(ts) ORDER BY id TTL ts + toIntervalDay(30) SETTINGS index_granularity = 8192, storage_policy = 'a, b'")
+	if ttl != "ts + toIntervalDay(30)" || s["index_granularity"] != "8192" || s["storage_policy"] != "'a, b'" || len(s) != 2 {
+		t.Errorf("splitEngine: %q %v", ttl, s)
+	}
+	ttl, s = splitEngine("MergeTree ORDER BY id")
+	if ttl != "" || len(s) != 0 {
+		t.Errorf("splitEngine plain: %q %v", ttl, s)
+	}
+}

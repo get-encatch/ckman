@@ -27,6 +27,9 @@ func users(conf *model.CKManClickHouseConfig) map[string]interface{} {
 		defaultUser[common.CkPasswdLabel(conf.EncryptType)] = common.CkPassword(conf.Password, conf.EncryptType)
 	}
 	defaultUser["profile"] = model.ClickHouseUserProfileDefault
+	if conf.ReadOnly() {
+		defaultUser["profile"] = model.CkfReadOnlyProfile
+	}
 	defaultUser["quota"] = model.ClickHouseUserQuotaDefault
 	defaultUser["access_management"] = 1
 	defaultNetworks := make(map[string]interface{})
@@ -40,6 +43,9 @@ func users(conf *model.CKManClickHouseConfig) map[string]interface{} {
 			normal := make(map[string]interface{})
 			normal[common.CkPasswdLabel(normalUser.EncryptType)] = common.CkPassword(normalUser.Password, normalUser.EncryptType)
 			normal["profile"] = common.GetStringwithDefault(normalUser.Profile, model.ClickHouseUserProfileDefault)
+			if conf.ReadOnly() {
+				normal["profile"] = readOnlyProfile(normal["profile"].(string))
+			}
 			normal["quota"] = common.GetStringwithDefault(normalUser.Quota, model.ClickHouseUserQuotaDefault)
 			if normalUser.Roles != "" {
 				normal["grants"] = map[string]interface{}{
@@ -80,8 +86,43 @@ func users(conf *model.CKManClickHouseConfig) map[string]interface{} {
 			userConf[normalUser.Name] = normal
 		}
 	}
+	//ckman's own user on fleet standbys, never read-only
+	if conf.Access != nil && conf.Access.SyncUser != "" {
+		userConf[conf.Access.SyncUser] = map[string]interface{}{
+			common.CkPasswdLabel(common.SHA256_HEX): common.CkPassword(conf.Access.SyncPassword, common.SHA256_HEX),
+			"profile":                               model.ClickHouseUserProfileDefault,
+			"quota":                                 model.ClickHouseUserQuotaDefault,
+			"access_management":                     1,
+			"networks":                              map[string]interface{}{"ip": model.ClickHouseUserNetIpDefault},
+		}
+	}
 	output["users"] = userConf
 	return output
+}
+
+// readOnlyProfile names the read-only twin of a profile.
+func readOnlyProfile(name string) string {
+	if name == model.ClickHouseUserProfileDefault {
+		return model.CkfReadOnlyProfile
+	}
+	return model.CkfReadOnlyProfile + "_" + name
+}
+
+// readOnlyProfiles adds a twin of every profile that inherits it and sets
+// readonly=2: reads and SET work, writes and DDL are refused.
+func readOnlyProfiles(conf *model.CKManClickHouseConfig) map[string]interface{} {
+	names := []string{model.ClickHouseUserProfileDefault}
+	for _, prof := range conf.UsersConf.Profiles {
+		names = append(names, prof.Name)
+	}
+	profileMap := make(map[string]interface{})
+	for _, name := range names {
+		profileMap[readOnlyProfile(name)] = map[string]interface{}{
+			"profile":  name,
+			"readonly": 2,
+		}
+	}
+	return map[string]interface{}{"profiles": profileMap}
 }
 
 func profiles(userProfiles []model.Profile, info HostInfo, version string) map[string]interface{} {
@@ -201,6 +242,9 @@ func GenerateUsersXML(filename string, conf *model.CKManClickHouseConfig, info H
 	mergo.Merge(&userconf, expert(conf.UsersConf.Expert))
 	mergo.Merge(&userconf, users(conf))
 	mergo.Merge(&userconf, profiles(conf.UsersConf.Profiles, info, conf.Version))
+	if conf.ReadOnly() {
+		mergo.Merge(&userconf, readOnlyProfiles(conf))
+	}
 	mergo.Merge(&userconf, quotas(conf.UsersConf.Quotas))
 	mergo.Merge(&userconf, roles(conf.UsersConf.Roles))
 	xml := common.NewXmlFile(filename)

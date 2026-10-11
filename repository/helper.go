@@ -20,6 +20,11 @@ var (
 func EncodePasswd(conf *model.CKManClickHouseConfig) {
 	conf.Password = common.AesEncryptECB(conf.Password)
 	conf.SshPassword = common.AesEncryptECB(conf.SshPassword)
+	if conf.Access != nil {
+		access := *conf.Access
+		access.SyncPassword = common.AesEncryptECB(access.SyncPassword)
+		conf.Access = &access
+	}
 	for idx, user := range conf.UsersConf.Users {
 		conf.UsersConf.Users[idx].Password = common.AesEncryptECB(user.Password)
 	}
@@ -49,6 +54,11 @@ func EncodePasswd(conf *model.CKManClickHouseConfig) {
 func DecodePasswd(conf *model.CKManClickHouseConfig) {
 	conf.Password = common.AesDecryptECB(conf.Password)
 	conf.SshPassword = common.AesDecryptECB(conf.SshPassword)
+	if conf.Access != nil {
+		access := *conf.Access
+		access.SyncPassword = common.AesDecryptECB(access.SyncPassword)
+		conf.Access = &access
+	}
 
 	var users []model.User
 	/*

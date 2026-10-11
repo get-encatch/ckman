@@ -3,7 +3,6 @@ package standby
 import (
 	"fmt"
 	"path"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -87,187 +86,6 @@ func idList(ids []string) string {
 	return strings.Join(q, ", ")
 }
 
-type tableInfo struct {
-	db, name, engine, ddl string
-}
-
-func (t tableInfo) key() string { return t.db + "." + t.name }
-func (t tableInfo) data() bool  { return strings.HasSuffix(t.engine, "MergeTree") }
-
-func listTables(c *common.Conn, dbs []string) ([]tableInfo, error) {
-	q := `SELECT database, name, engine, create_table_query FROM system.tables
-WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema') AND is_temporary = 0
-  AND NOT startsWith(name, '.inner') AND NOT startsWith(name, '__ckf_stage_') AND engine IN ('MergeTree', 'ReplacingMergeTree', 'SummingMergeTree',
-  'AggregatingMergeTree', 'CollapsingMergeTree', 'VersionedCollapsingMergeTree', 'GraphiteMergeTree',
-  'ReplicatedMergeTree', 'ReplicatedReplacingMergeTree', 'ReplicatedSummingMergeTree', 'ReplicatedAggregatingMergeTree',
-  'ReplicatedCollapsingMergeTree', 'ReplicatedVersionedCollapsingMergeTree', 'ReplicatedGraphiteMergeTree',
-  'Distributed', 'View', 'MaterializedView')`
-	if len(dbs) > 0 {
-		quoted := make([]string, len(dbs))
-		for i, d := range dbs {
-			quoted[i] = lit(d)
-		}
-		q += " AND database IN (" + strings.Join(quoted, ", ") + ")"
-	}
-	rows, err := c.Query(q + " ORDER BY database, name")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []tableInfo
-	for rows.Next() {
-		var t tableInfo
-		if err := rows.Scan(&t.db, &t.name, &t.engine, &t.ddl); err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	// data tables first, then Distributed, then views (they refer to tables)
-	rank := func(t tableInfo) int {
-		switch {
-		case t.data():
-			return 0
-		case t.engine == "Distributed":
-			return 1
-		default:
-			return 2
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
-	return out, nil
-}
-
-var createRe = regexp.MustCompile(`^CREATE (TABLE|VIEW|MATERIALIZED VIEW) (\S+)`)
-
-// standbyDDL turns a primary CREATE into an idempotent ON CLUSTER create on
-// the standby; Distributed tables point at the standby cluster.
-func standbyDDL(ddl, primary, standby string) string {
-	ddl = createRe.ReplaceAllString(ddl, "CREATE $1 IF NOT EXISTS $2 ON CLUSTER `"+standby+"`")
-	return strings.ReplaceAll(ddl, "Distributed('"+primary+"'", "Distributed('"+standby+"'")
-}
-
-func existing(c *common.Conn) (map[string]bool, map[string]bool, error) {
-	tables, dbs := map[string]bool{}, map[string]bool{}
-	rows, err := c.Query("SELECT database, name FROM system.tables")
-	if err != nil {
-		return nil, nil, err
-	}
-	for rows.Next() {
-		var d, n string
-		if err := rows.Scan(&d, &n); err == nil {
-			tables[d+"."+n] = true
-		}
-	}
-	rows.Close()
-	rows, err = c.Query("SELECT name FROM system.databases")
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var d string
-		if err := rows.Scan(&d); err == nil {
-			dbs[d] = true
-		}
-	}
-	return tables, dbs, nil
-}
-
-type column struct {
-	name, typ, kind, expr string
-}
-
-// spec is the column's definition as it appears in ALTER: type and default.
-func (c column) spec() string {
-	if c.kind == "" {
-		return c.typ
-	}
-	return fmt.Sprintf("%s %s %s", c.typ, c.kind, c.expr)
-}
-
-func columns(c *common.Conn, db, table string) ([]column, error) {
-	rows, err := c.Query(fmt.Sprintf("SELECT name, type, default_kind, default_expression FROM system.columns WHERE database = %s AND table = %s ORDER BY position", lit(db), lit(table)))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []column
-	for rows.Next() {
-		var col column
-		if err := rows.Scan(&col.name, &col.typ, &col.kind, &col.expr); err != nil {
-			return nil, err
-		}
-		out = append(out, col)
-	}
-	return out, nil
-}
-
-// syncColumns makes the standby table's columns match the primary's: added
-// columns go in the same position with the same default, changed ones are
-// modified. RESTORE refuses a table whose definition differs.
-func syncColumns(sb *model.Standby, pc, sc *common.Conn, t tableInfo) []string {
-	pcols, err := columns(pc, t.db, t.name)
-	if err != nil {
-		return nil
-	}
-	scols, err := columns(sc, t.db, t.name)
-	if err != nil {
-		return nil
-	}
-	have := map[string]column{}
-	for _, c := range scols {
-		have[c.name] = c
-	}
-	var problems []string
-	for i, c := range pcols {
-		var q string
-		if old, ok := have[c.name]; !ok {
-			pos := " FIRST"
-			if i > 0 {
-				pos = " AFTER `" + pcols[i-1].name + "`"
-			}
-			q = fmt.Sprintf("ALTER TABLE %s ON CLUSTER `%s` ADD COLUMN IF NOT EXISTS `%s` %s%s", ident(t.db, t.name), sb.Cluster, c.name, c.spec(), pos)
-		} else if old.spec() != c.spec() {
-			q = fmt.Sprintf("ALTER TABLE %s ON CLUSTER `%s` MODIFY COLUMN `%s` %s", ident(t.db, t.name), sb.Cluster, c.name, c.spec())
-		} else {
-			continue
-		}
-		if err := sc.Exec(q); err != nil {
-			problems = append(problems, fmt.Sprintf("column %s.%s: %v", t.key(), c.name, err))
-		}
-	}
-	return problems
-}
-
-// syncSchema creates missing databases and tables on the standby and adds
-// columns that appeared on the primary.
-func syncSchema(sb *model.Standby, pc, sc *common.Conn, tables []tableInfo) []string {
-	var problems []string
-	have, dbs, err := existing(sc)
-	if err != nil {
-		return []string{fmt.Sprintf("read standby schema: %v", err)}
-	}
-	for _, t := range tables {
-		if !dbs[t.db] {
-			if err := sc.Exec(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` ON CLUSTER `%s`", t.db, sb.Cluster)); err != nil {
-				problems = append(problems, fmt.Sprintf("create database %s: %v", t.db, err))
-				continue
-			}
-			dbs[t.db] = true
-		}
-		if !have[t.key()] {
-			if err := sc.Exec(standbyDDL(t.ddl, sb.Primary, sb.Cluster)); err != nil {
-				problems = append(problems, fmt.Sprintf("create %s: %v", t.key(), err))
-			}
-			continue
-		}
-		if t.data() {
-			problems = append(problems, syncColumns(sb, pc, sc, t)...)
-		}
-	}
-	return problems
-}
-
 // fingerprints: per partition, a hash of its active part names (changes on
 // every insert, merge or mutation) and its rows.
 func fingerprints(c *common.Conn, db, table string) (map[string]string, uint64, error) {
@@ -326,7 +144,9 @@ func syncOnce(sb *model.Standby) error {
 	if err != nil {
 		return errors.Wrap(err, "list primary tables")
 	}
-	problems := syncSchema(sb, pcs[0], scs[0], tables)
+	schema := syncSchema(sb, pcs[0], scs[0], tables)
+	problems := schema.problems
+	sb.SchemaNotes = schema.notes
 
 	run := time.Now().UTC().Format("20060102T150405")
 	newChain := sb.ChainID == "" || sb.ChainRuns >= chainRuns
@@ -344,6 +164,14 @@ func syncOnce(sb *model.Standby) error {
 			continue
 		}
 		seen[t.key()] = true
+		if schema.rebuild[t.key()] {
+			n, err := rebuildTable(sb, tgt, t, pcs, scs, run)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("rebuild %s: %v", t.key(), err))
+			}
+			copied += n
+			continue
+		}
 		st := sb.Tables[t.key()]
 		if st == nil {
 			st = &model.StandbyTable{Shards: map[int]map[string]string{}, LastKey: map[int]string{}}
@@ -392,6 +220,19 @@ func syncShard(sb *model.Standby, tgt target, t tableInfo, st *model.StandbyTabl
 		st.Shards[i] = last
 	}
 	var changed, removed []string
+	if len(last) == 0 {
+		// first copy: partitions only the standby has go too (a rejoined
+		// old primary may hold writes the active cluster never got)
+		have, _, err := fingerprints(sc, t.db, t.standbyName())
+		if err != nil {
+			return 0, errors.Wrap(err, "read standby partitions")
+		}
+		for pid := range have {
+			if _, ok := fp[pid]; !ok {
+				last[pid] = ""
+			}
+		}
+	}
 	for pid, h := range fp {
 		if last[pid] != h {
 			changed = append(changed, pid)
@@ -411,7 +252,7 @@ func syncShard(sb *model.Standby, tgt target, t tableInfo, st *model.StandbyTabl
 		}
 		sort.Strings(backupIDs)
 	}
-	name := ident(t.db, t.name)
+	name, dst := ident(t.db, t.name), ident(t.db, t.standbyName())
 	if newChain && len(backupIDs) == 0 {
 		delete(st.LastKey, i) // nothing to back up: don't keep a base in the old chain
 	}
@@ -437,12 +278,51 @@ func syncShard(sb *model.Standby, tgt target, t tableInfo, st *model.StandbyTabl
 		}
 	}
 	for _, pid := range removed {
-		if err := sc.Exec(fmt.Sprintf("ALTER TABLE %s DROP PARTITION ID %s", name, lit(pid))); err != nil {
+		if err := sc.Exec(fmt.Sprintf("ALTER TABLE %s DROP PARTITION ID %s", dst, lit(pid))); err != nil {
 			return len(changed), errors.Wrapf(err, "drop removed partition %s", pid)
 		}
 		delete(last, pid)
 	}
 	return len(changed), nil
+}
+
+// rebuildTable replaces a standby table whose definition can't be altered
+// into the primary's: the primary's definition is created under a temporary
+// name, filled from a full backup of every shard and exchanged with the old
+// table, which is then dropped. Until the exchange the old table serves reads.
+func rebuildTable(sb *model.Standby, tgt target, t tableInfo, pcs, scs []*common.Conn, run string) (int, error) {
+	tmp := t
+	tmp.dest = rebuildName(t.name)
+	drop := func(table string) error {
+		return scs[0].Exec("DROP TABLE IF EXISTS " + ident(t.db, table) + onCluster(sb) + " SYNC")
+	}
+	if err := drop(tmp.dest); err != nil {
+		return 0, errors.Wrap(err, "drop an old rebuild table")
+	}
+	ddl := rebuildDDL(t.ddl, tmp.dest, "ckf_"+strings.ToLower(run))
+	if err := scs[0].Exec(standbyDDL(ddl, sb.Primary, sb.Cluster)); err != nil {
+		return 0, errors.Wrap(err, "create the new table")
+	}
+	st := &model.StandbyTable{Shards: map[int]map[string]string{}, LastKey: map[int]string{}}
+	copied := 0
+	for i := range pcs {
+		n, err := syncShard(sb, tgt, tmp, st, i, pcs[i], scs[i], run, true)
+		copied += n
+		if err != nil {
+			_ = drop(tmp.dest)
+			return copied, errors.Wrapf(err, "shard %d", i+1)
+		}
+		st.StandbyRows += tableRows(scs[i], t.db, tmp.dest)
+	}
+	if err := scs[0].Exec(fmt.Sprintf("EXCHANGE TABLES %s AND %s%s", ident(t.db, t.name), ident(t.db, tmp.dest), onCluster(sb))); err != nil {
+		_ = drop(tmp.dest)
+		return copied, errors.Wrap(err, "swap in the new table")
+	}
+	if err := drop(tmp.dest); err != nil {
+		log.Logger.Warnf("[standby] %s: drop the replaced %s: %v", sb.Primary, t.key(), err)
+	}
+	sb.Tables[t.key()] = st
+	return copied, nil
 }
 
 // Staged replace: changed partitions are restored into a staging table next
@@ -463,7 +343,7 @@ func stageName(table string) string {
 
 func stagedReplace(sc *common.Conn, t tableInfo, ids []string, dest string) error {
 	var engineFull string
-	q := fmt.Sprintf("SELECT engine_full FROM system.tables WHERE database = %s AND name = %s", lit(t.db), lit(t.name))
+	q := fmt.Sprintf("SELECT engine_full FROM system.tables WHERE database = %s AND name = %s", lit(t.db), lit(t.standbyName()))
 	if err := sc.QueryRow(q).Scan(&engineFull); err != nil {
 		return errors.Wrap(err, "read the standby table's engine")
 	}
@@ -471,8 +351,9 @@ func stagedReplace(sc *common.Conn, t tableInfo, ids []string, dest string) erro
 	if err != nil {
 		return err
 	}
-	target := ident(t.db, t.name)
-	stage := ident(t.db, stageName(t.name))
+	source := ident(t.db, t.name) // its name in the backup
+	target := ident(t.db, t.standbyName())
+	stage := ident(t.db, stageName(t.standbyName()))
 	_ = sc.Exec("DROP TABLE IF EXISTS " + stage + " SYNC")
 	defer func() { _ = sc.Exec("DROP TABLE IF EXISTS " + stage + " SYNC") }()
 	if err := sc.Exec(fmt.Sprintf("CREATE TABLE %s AS %s ENGINE = %s", stage, target, engine)); err != nil {
@@ -481,7 +362,7 @@ func stagedReplace(sc *common.Conn, t tableInfo, ids []string, dest string) erro
 	// the backup holds the replicated definition; the staging table differs
 	// only in not being replicated
 	q = fmt.Sprintf("RESTORE TABLE %s AS %s PARTITIONS %s FROM %s SETTINGS allow_non_empty_tables = 1, allow_different_table_def = 1",
-		target, stage, idList(ids), dest)
+		source, stage, idList(ids), dest)
 	if err := sc.Exec(q); err != nil {
 		return errors.Wrap(err, "restore into staging (the standby table is unchanged)")
 	}

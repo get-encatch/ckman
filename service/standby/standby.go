@@ -331,16 +331,28 @@ func Promote(primary string, finalSync bool) (string, error) {
 	if !sb.PromotedAt.IsZero() {
 		return "", errors.New("already promoted")
 	}
-	note := ""
-	if sb.Mode == model.StandbyModeStorage && finalSync {
-		if err := syncOnce(sb); err != nil {
-			note = "final sync failed: " + err.Error() + "; the standby has data as of the last successful sync"
-		} else {
-			sb.LastSuccess = time.Now()
-			note = "final sync done"
+	var notes []string
+	if sb.Mode == model.StandbyModeStorage {
+		// fence first so no write lands on the primary after the final sync
+		fence(sb)
+		if !sb.Fenced {
+			notes = append(notes, sb.Primary+" didn't answer: it is made read-only as soon as it does")
+		}
+		if finalSync {
+			if err := syncOnce(sb); err != nil {
+				notes = append(notes, "final sync failed: "+err.Error()+"; the standby has data as of the last successful sync")
+			} else {
+				sb.LastSuccess = time.Now()
+				notes = append(notes, "final sync done")
+			}
+		}
+		if err := setAccess(sb.Cluster, false); err != nil {
+			_ = put(sb)
+			return "", errors.Wrap(err, "make the standby writable")
 		}
 	}
 	sb.PromotedAt, sb.Paused, sb.State = time.Now(), true, "promoted"
+	note := strings.Join(notes, "; ")
 	sb.StateMessage = note
 	return note, put(sb)
 }
@@ -447,7 +459,12 @@ func runSync(primary string) {
 	sb.LastStart, sb.State = time.Now(), "syncing"
 	_ = put(sb)
 	started := sb.LastStart
-	err = syncOnce(sb)
+	err = ensureStandbyAccess(sb)
+	if err != nil {
+		err = errors.Wrap(err, "make the standby read-only")
+	} else {
+		err = syncOnce(sb)
+	}
 	sb.LastEnd = time.Now()
 	sb.Syncs++
 	if err != nil {
@@ -469,6 +486,7 @@ func tick() {
 	if err != nil {
 		return
 	}
+	retryFences(all)
 	for _, sb := range all {
 		if sb.Mode != model.StandbyModeStorage || sb.Paused || !sb.PromotedAt.IsZero() {
 			continue

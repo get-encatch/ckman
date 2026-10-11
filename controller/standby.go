@@ -51,7 +51,7 @@ func (fc *FleetController) CreateStandby(c *gin.Context) {
 	fc.wrapfunc(c, model.E_SUCCESS, gin.H{"task_id": taskID})
 }
 
-// StandbyAction: POST /fleet/standby/:cluster/:action (sync, pause, resume, promote)
+// StandbyAction: POST /fleet/standby/:cluster/:action (sync, pause, resume, promote, rejoin, switchover)
 func (fc *FleetController) StandbyAction(c *gin.Context) {
 	cluster := c.Param("cluster")
 	var err error
@@ -65,6 +65,13 @@ func (fc *FleetController) StandbyAction(c *gin.Context) {
 		err = standby.SetPaused(cluster, false)
 	case "promote":
 		note, err = standby.Promote(cluster, c.Query("final_sync") == "true")
+	case "rejoin":
+		note, err = standby.Rejoin(cluster)
+		if err == nil {
+			note = "snapshot: " + note
+		}
+	case "switchover":
+		err = standby.Switchover(cluster)
 	default:
 		fc.wrapfunc(c, model.E_INVALID_PARAMS, "unknown action")
 		return
