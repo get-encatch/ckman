@@ -23,6 +23,9 @@ func (s *Service) SubmitBackupRequest(cluster string, req model.BackupRequest) (
 	if err := validateDailyRange(req.ScheduleType, req.BackupStyle, req.BackupType, req.StartDate, req.RangeStartDate, req.RangeEndDate, req.DaysBefore); err != nil {
 		return nil, err
 	}
+	if err := validateNativeOptions(req.BackupStyle, req.Clean, req.Checksum, req.FullEvery); err != nil {
+		return nil, err
+	}
 	if err := validateBandwidth(req.Target, req.MaxBandwidthMB, func() (model.CKManClickHouseConfig, error) {
 		return s.lookupCluster(cluster)
 	}); err != nil {
@@ -99,6 +102,7 @@ func (s *Service) SubmitBackupRequest(cluster string, req model.BackupRequest) (
 			Compression:    req.Compression,
 			Checksum:       req.Checksum,
 			MaxBandwidthMB: req.MaxBandwidthMB,
+			FullEvery:      req.FullEvery,
 			Clean:          req.Clean,
 			Enabled:        req.ScheduleType == model.BACKUP_SCHEDULED,
 		}

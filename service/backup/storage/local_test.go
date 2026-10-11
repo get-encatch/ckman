@@ -26,7 +26,7 @@ func TestLocal_Init_AcceptsGoodPath(t *testing.T) {
 
 func TestLocal_BackupSQL(t *testing.T) {
 	l := NewLocal(model.TargetLocal{Path: "/data/backups"}, "", nil)
-	out := l.BackupSQL("dba", "events_log", "20250508", "20250508/dba.events_log/host1")
+	out := l.BackupSQL("dba", "events_log", "20250508", "", "20250508/dba.events_log/host1")
 	if !strings.Contains(out, "TO File('/data/backups/20250508/dba.events_log/host1')") {
 		t.Fatalf("unexpected: %s", out)
 	}
@@ -37,7 +37,7 @@ func TestLocal_BackupSQL(t *testing.T) {
 
 func TestLocal_BackupSQL_AllPartition(t *testing.T) {
 	l := NewLocal(model.TargetLocal{Path: "/data/backups"}, "", nil)
-	out := l.BackupSQL("d", "t", "all", "all/d.t/h")
+	out := l.BackupSQL("d", "t", "all", "", "all/d.t/h")
 	if strings.Contains(out, "PARTITION") {
 		t.Fatalf("'all' should not emit PARTITION clause: %s", out)
 	}
@@ -48,7 +48,7 @@ func TestLocal_BackupSQL_AllPartition(t *testing.T) {
 
 func TestLocal_RestoreSQL(t *testing.T) {
 	l := NewLocal(model.TargetLocal{Path: "/data/backups"}, "", nil)
-	out := l.RestoreSQL("d", "t", "20250508", "20250508/d.t/h")
+	out := l.RestoreSQL("d", "t", "20250508", "", "20250508/d.t/h")
 	if !strings.Contains(out, "FROM File('/data/backups/20250508/d.t/h')") || !strings.Contains(out, "PARTITION '20250508'") {
 		t.Fatalf("unexpected: %s", out)
 	}

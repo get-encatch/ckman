@@ -31,6 +31,7 @@ type shardConn struct {
 	host    string
 	conn    *common.Conn // 真实 adapter 注入；测试 fake 留 nil
 	cluster string       // CH 集群名(remote_servers 里的),供分区发现走 clusterAllReplicas 用
+	shard   int          // 1-based shard number (native backups are keyed by shard, not host)
 }
 
 // stages 让 Executor 把 5 个阶段分别可单测。
@@ -57,6 +58,9 @@ type Executor struct {
 	listPartitions       func(c *shardConn, db, table, fromYYYYMMDD, toYYYYMMDD string) ([]string, error)
 	listAllPartitions    func(c *shardConn, db, table string) ([]string, error)
 	getLastRunPartitions func(cluster, db, table string) ([]model.BackupRunPartition, error)
+	partitionIDs         func(c *shardConn, db, table string) (map[string]string, error)          // partition name -> partition_id
+	nativeInventory      func(c *shardConn, db, table string) ([]model.BackupRunPartition, error) // active partitions with totals
+	policyRuns           func(policyID string) ([]model.BackupRun, error)                         // newest first
 	stages               stages
 	now                  func() time.Time
 
@@ -76,8 +80,8 @@ type Executor struct {
 // Task 21 真实 adapter 注入时会传入满足此接口的具体实现。
 type BackupStorage interface {
 	Init() error
-	BackupSQL(database, table, partition, key string) string
-	RestoreSQL(database, table, partition, key string) string
+	BackupSQL(database, table, partition, partitionID, key string) string
+	RestoreSQL(database, table, partition, partitionID, key string) string
 	CleanPartition(host, keyPrefix string) error
 	CheckPartition(host, keyPrefix string, pathInfo map[string]model.PathInfo) error
 	Type() string
@@ -211,6 +215,9 @@ func (e *Executor) resolveRunPartitions(r *model.BackupRun, policy model.BackupP
 	if r.Operation != model.OP_BACKUP {
 		return nil
 	}
+	if policy.BackupStyle == model.BACKUP_STYLE_NATIVE {
+		return e.resolveNativeRun(r, policy)
+	}
 	switch {
 	case policy.BackupStyle == model.BACKUP_STYLE_FULL:
 		// 全量：枚举表全部 active 分区，每次都重备
@@ -254,7 +261,26 @@ func (e *Executor) resolveRunPartitions(r *model.BackupRun, policy model.BackupP
 		return fmt.Errorf("unsupported backup mode: style=%s type=%s startDate=%s daysBefore=%d",
 			policy.BackupStyle, policy.BackupType, policy.StartDate, policy.DaysBefore)
 	}
+	e.fillPartitionIDs(r, policy)
 	return nil
+}
+
+// fillPartitionIDs records each partition's ClickHouse partition_id so the
+// BACKUP / RESTORE / DROP statements can address it by ID (works for every
+// partition key, including unpartitioned tables). Without the lookup the run
+// falls back to quoted partition names, as before.
+func (e *Executor) fillPartitionIDs(r *model.BackupRun, policy model.BackupPolicy) {
+	if e.partitionIDs == nil || len(r.Partitions) == 0 {
+		return
+	}
+	ids, err := e.partitionIDs(e.conns[0], policy.Database, policy.Table)
+	if err != nil {
+		log.Logger.Warnf("[exec] partition ids for %s.%s: %v; using partition names", policy.Database, policy.Table, err)
+		return
+	}
+	for i := range r.Partitions {
+		r.Partitions[i].PartitionID = ids[r.Partitions[i].Partition]
+	}
 }
 
 func hasFixedDailyRange(policy model.BackupPolicy) bool {
@@ -374,6 +400,9 @@ func (realStages) Backup(ctx context.Context, e *Executor, runID string) error {
 	if err != nil {
 		return err
 	}
+	if run.Native {
+		return e.nativeBackup(run)
+	}
 	var anyFail bool
 
 	for i := range run.Partitions {
@@ -421,10 +450,10 @@ func (realStages) Backup(ctx context.Context, e *Executor, runID string) error {
 		for _, c := range e.conns {
 			c := c
 			go func() {
-				key := storage.JoinRunKey(run.StoragePrefix, p.Partition, run.Database, run.Table, c.host)
+				key := storage.JoinRunKey(run.StoragePrefix, p.KeySegment(), run.Database, run.Table, c.host)
 				sql := fmt.Sprintf("BACKUP TABLE `%s`.`%s`%s",
 					run.Database, run.Table,
-					e.storage.BackupSQL(run.Database, run.Table, p.Partition, key))
+					e.storage.BackupSQL(run.Database, run.Table, p.Partition, p.PartitionID, key))
 				ch <- result{c.host, e.execSQL(c.host, sql)}
 			}()
 		}
@@ -458,6 +487,9 @@ func (realStages) Restore(ctx context.Context, e *Executor, runID string) error 
 	if err != nil {
 		return err
 	}
+	if run.Native {
+		return e.nativeRestore(run)
+	}
 	var anyFail bool
 	for i := range run.Partitions {
 		p := &run.Partitions[i]
@@ -478,10 +510,10 @@ func (realStages) Restore(ctx context.Context, e *Executor, runID string) error 
 		for _, c := range e.conns {
 			c := c
 			go func() {
-				key := storage.JoinRunKey(run.StoragePrefix, p.Partition, run.Database, run.Table, c.host)
+				key := storage.JoinRunKey(run.StoragePrefix, p.KeySegment(), run.Database, run.Table, c.host)
 				sql := fmt.Sprintf("RESTORE TABLE `%s`.`%s`%s SETTINGS allow_non_empty_tables=true",
 					run.Database, run.Table,
-					e.storage.RestoreSQL(run.Database, run.Table, p.Partition, key))
+					e.storage.RestoreSQL(run.Database, run.Table, p.Partition, p.PartitionID, key))
 				ch <- result{c.host, e.execSQL(c.host, sql)}
 			}()
 		}
@@ -514,6 +546,9 @@ func (realStages) Check(ctx context.Context, e *Executor, runID string) error {
 	if err != nil {
 		return err
 	}
+	if run.Native {
+		return nil // checksums are per-partition files; native backups are rejected with checksum=true
+	}
 	var firstErr error
 	for i := range run.Partitions {
 		p := &run.Partitions[i]
@@ -525,7 +560,7 @@ func (realStages) Check(ctx context.Context, e *Executor, runID string) error {
 			c := c
 			pp := *p
 			g.Go(func() error {
-				keyPrefix := storage.JoinRunKey(run.StoragePrefix, pp.Partition, run.Database, run.Table, c.host)
+				keyPrefix := storage.JoinRunKey(run.StoragePrefix, pp.KeySegment(), run.Database, run.Table, c.host)
 				return e.storage.CheckPartition(c.host, keyPrefix, pp.PathInfo)
 			})
 		}
@@ -556,7 +591,7 @@ func (realStages) Close(ctx context.Context, e *Executor, runID string) error {
 	}
 	// 清理动作只属于备份:把已成功备份的分区从源表删除。restore run 复用了 backup
 	// 的 policy(可能 Clean=true),但恢复成功后绝不能再 DROP 刚恢复的数据。
-	if run.Operation != model.OP_BACKUP {
+	if run.Operation != model.OP_BACKUP || run.Native {
 		return nil
 	}
 	if !policy.Clean {
@@ -577,8 +612,11 @@ func (realStages) Close(ctx context.Context, e *Executor, runID string) error {
 			continue
 		}
 		for _, c := range e.conns {
-			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` DROP PARTITION '%s'",
-				run.Database, run.Table, strings.ReplaceAll(p.Partition, "'", "''"))
+			clause := storage.PartitionClause(p.Partition, p.PartitionID)
+			if clause == "" {
+				clause = " PARTITION ID 'all'" // unpartitioned table: its single partition
+			}
+			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` DROP%s", run.Database, run.Table, clause)
 			if err := e.execSQL(c.host, sql); err != nil {
 				dropErrs = append(dropErrs, fmt.Errorf("[%s][%s] %w", c.host, p.Partition, err))
 			}
@@ -631,12 +669,16 @@ func (realStages) Prepare(ctx context.Context, e *Executor, runID string) error 
 	}
 
 	// 清旧目标端残留：失败立即终止 run（不静默）
+	// native backups write to a fresh per-run key, so there is nothing to clear.
+	if run.Native {
+		return nil
+	}
 	for _, p := range run.Partitions {
 		if p.Status != model.BACKUP_PARTITION_STATUS_WAITING {
 			continue
 		}
 		for _, c := range e.conns {
-			keyPrefix := storage.JoinRunKey(run.StoragePrefix, p.Partition, run.Database, run.Table, c.host)
+			keyPrefix := storage.JoinRunKey(run.StoragePrefix, p.KeySegment(), run.Database, run.Table, c.host)
 			if err := e.storage.CleanPartition(c.host, keyPrefix); err != nil {
 				return fmt.Errorf("clean %s on %s: %w", p.Partition, c.host, err)
 			}

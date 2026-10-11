@@ -29,9 +29,13 @@ type fakeStorage struct {
 	checkErr func(keyPrefix string) error // 按 keyPrefix 决定校验结果，nil 表示全部通过
 }
 
-func (f *fakeStorage) Init() error                         { return nil }
-func (f *fakeStorage) BackupSQL(d, t, p, k string) string  { return fmt.Sprintf(" PARTITION '%s'", p) }
-func (f *fakeStorage) RestoreSQL(d, t, p, k string) string { return fmt.Sprintf(" PARTITION '%s'", p) }
+func (f *fakeStorage) Init() error { return nil }
+func (f *fakeStorage) BackupSQL(d, t, p, id, k string) string {
+	return fmt.Sprintf(" PARTITION '%s'", p)
+}
+func (f *fakeStorage) RestoreSQL(d, t, p, id, k string) string {
+	return fmt.Sprintf(" PARTITION '%s'", p)
+}
 func (f *fakeStorage) CleanPartition(host, keyPrefix string) error {
 	_ = host
 	f.cleaned = append(f.cleaned, keyPrefix)
@@ -652,10 +656,10 @@ type checksumStorage struct {
 	check func(host, keyPrefix string, pi map[string]model.PathInfo) error
 }
 
-func (s *checksumStorage) Init() error                         { return nil }
-func (s *checksumStorage) BackupSQL(_, _, _, _ string) string  { return "" }
-func (s *checksumStorage) RestoreSQL(_, _, _, _ string) string { return "" }
-func (s *checksumStorage) CleanPartition(_, _ string) error    { return nil }
+func (s *checksumStorage) Init() error                            { return nil }
+func (s *checksumStorage) BackupSQL(_, _, _, _, _ string) string  { return "" }
+func (s *checksumStorage) RestoreSQL(_, _, _, _, _ string) string { return "" }
+func (s *checksumStorage) CleanPartition(_, _ string) error       { return nil }
 func (s *checksumStorage) CheckPartition(host, keyPrefix string, pi map[string]model.PathInfo) error {
 	return s.check(host, keyPrefix, pi)
 }

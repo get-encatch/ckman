@@ -207,11 +207,16 @@ func executeExclusive(repo ServiceRepo, inFlight *sync.Map, runID string,
 // storage 也会跨 policy 串台。
 func newRealExecutor(repo ExecRepo, chAdapter *ClickHouseAdapter) *Executor {
 	e := &Executor{
-		repo:                  repo,
-		connFactory:           chAdapter.ConnFactory,
-		listPartitions:        chAdapter.ListPartitions,
-		listAllPartitions:     chAdapter.ListAllPartitions,
-		getLastRunPartitions:  chAdapter.GetLastRunPartitions,
+		repo:                 repo,
+		connFactory:          chAdapter.ConnFactory,
+		listPartitions:       chAdapter.ListPartitions,
+		listAllPartitions:    chAdapter.ListAllPartitions,
+		getLastRunPartitions: chAdapter.GetLastRunPartitions,
+		partitionIDs:         chAdapter.PartitionIDs,
+		nativeInventory:      chAdapter.NativeInventory,
+		policyRuns: func(policyID string) ([]model.BackupRun, error) {
+			return repository.Ps.GetRunsByPolicy(policyID, 0, time.Time{})
+		},
 		collectChecksumOnHost: chAdapter.CollectChecksumOnHost,
 		stages:                realStages{},
 	}

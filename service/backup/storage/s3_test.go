@@ -14,7 +14,7 @@ func TestS3_BackupSQL(t *testing.T) {
 		AccessKeyID:     "AK",
 		SecretAccessKey: "SK",
 	}, "gzip")
-	out := s.BackupSQL("dba", "events_log", "20250508", "20250508/dba.events_log/host1")
+	out := s.BackupSQL("dba", "events_log", "20250508", "", "20250508/dba.events_log/host1")
 	if !strings.Contains(out, "S3('http://s3.example.com:9000/ckman-backup/20250508/dba.events_log/host1', 'AK', 'SK')") {
 		t.Fatalf("unexpected sql: %s", out)
 	}
@@ -25,7 +25,7 @@ func TestS3_BackupSQL(t *testing.T) {
 
 func TestS3_BackupSQL_AllPartition(t *testing.T) {
 	s := NewS3(model.TargetS3{Endpoint: "http://x", Bucket: "b", AccessKeyID: "a", SecretAccessKey: "s"}, "")
-	out := s.BackupSQL("d", "t", "all", "all/d.t/h")
+	out := s.BackupSQL("d", "t", "all", "", "all/d.t/h")
 	if strings.Contains(out, "PARTITION") {
 		t.Fatalf("'all' should not emit PARTITION clause: %s", out)
 	}
@@ -36,7 +36,7 @@ func TestS3_BackupSQL_AllPartition(t *testing.T) {
 
 func TestS3_RestoreSQL(t *testing.T) {
 	s := NewS3(model.TargetS3{Endpoint: "http://x", Bucket: "b", AccessKeyID: "a", SecretAccessKey: "s"}, "")
-	out := s.RestoreSQL("d", "t", "20250508", "20250508/d.t/h")
+	out := s.RestoreSQL("d", "t", "20250508", "", "20250508/d.t/h")
 	if !strings.Contains(out, "FROM S3(") || !strings.Contains(out, "PARTITION '20250508'") {
 		t.Fatalf("unexpected: %s", out)
 	}
@@ -52,7 +52,7 @@ func TestS3_Init_RejectsBadEndpoint(t *testing.T) {
 func TestS3_EscapesSingleQuoteInCredentials(t *testing.T) {
 	// AK/SK 含单引号必须转义，否则 BACKUP TABLE SQL 解析会断
 	s := NewS3(model.TargetS3{Endpoint: "http://x", Bucket: "b", AccessKeyID: "a'b", SecretAccessKey: "s'k"}, "")
-	out := s.BackupSQL("d", "t", "p", "p/d.t/h")
+	out := s.BackupSQL("d", "t", "p", "", "p/d.t/h")
 	if strings.Count(out, "''") < 2 {
 		t.Fatalf("expected ' to be doubled, got: %s", out)
 	}

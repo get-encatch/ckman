@@ -45,11 +45,12 @@ func (s *Service) SubmitRestore(cluster string, req RestoreRequest) (string, err
 			return "", fmt.Errorf("partition %s not in source run as success", p)
 		}
 		partitions = append(partitions, model.BackupRunPartition{
-			Partition: p,
-			Status:    model.BACKUP_PARTITION_STATUS_WAITING,
-			Size:      sp.Size,
-			Rows:      sp.Rows,
-			FileNum:   sp.FileNum,
+			Partition:   p,
+			PartitionID: sp.PartitionID,
+			Status:      model.BACKUP_PARTITION_STATUS_WAITING,
+			Size:        sp.Size,
+			Rows:        sp.Rows,
+			FileNum:     sp.FileNum,
 		})
 	}
 
@@ -66,6 +67,9 @@ func (s *Service) SubmitRestore(cluster string, req RestoreRequest) (string, err
 		Status:        model.BACKUP_STATUS_QUEUED,
 		StoragePrefix: src.StoragePrefix, // 必须透传源 run 的 prefix（不能用当前 cluster 名）：老备份 prefix="" 才能找到老 S3 对象
 		Partitions:    partitions,
+		SourceRunID:   src.RunID,
+		Native:        src.Native,
+		NativeShards:  src.NativeShards,
 		CreateTime:    now,
 	}
 	if err := s.repo.CreateRun(run); err != nil {
