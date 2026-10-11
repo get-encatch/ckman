@@ -121,6 +121,9 @@ func (c *DataManageController) ListPolicies(ctx *gin.Context) {
 		c.wrapfunc(ctx, model.E_DATA_SELECT_FAILED, err)
 		return
 	}
+	for i := range policies {
+		policies[i].S3.SecretAccessKey = "" // never sent to the browser; edits keep the stored one
+	}
 	c.wrapfunc(ctx, model.E_SUCCESS, policies)
 }
 
@@ -136,6 +139,7 @@ func (c *DataManageController) GetPolicy(ctx *gin.Context) {
 		c.wrapfunc(ctx, model.E_DATA_SELECT_FAILED, err)
 		return
 	}
+	p.S3.SecretAccessKey = "" // never sent to the browser; edits keep the stored one
 	c.wrapfunc(ctx, model.E_SUCCESS, p)
 }
 

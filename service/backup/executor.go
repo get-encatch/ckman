@@ -180,7 +180,11 @@ func (e *Executor) Init(ctx context.Context, runID string) error {
 		if cerr != nil {
 			return fmt.Errorf("get cluster %s: %w", policy.ClusterName, cerr)
 		}
-		e.storage = NewStorageForPolicy(policy, cluster)
+		resolved, rerr := ResolvePolicyTarget(policy)
+		if rerr != nil {
+			return rerr
+		}
+		e.storage = NewStorageForPolicy(resolved, cluster)
 		if e.storage == nil {
 			return fmt.Errorf("unsupported target type: %s", policy.TargetType)
 		}

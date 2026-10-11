@@ -875,3 +875,29 @@ func (lp *LocalPersistent) UpdateUser(_ model.CkmanUser) error {
 }
 
 func (lp *LocalPersistent) DeleteUser(_ string) error { return repository.ErrRecordNotFound }
+
+// ─── StorageConnection ───────────────────────────────────────────────────────
+// The legacy JSON store predates storage connections (like users); they need
+// a database-backed persistent policy.
+
+var errStorageConnUnsupported = errors.New("storage connections need a database-backed persistent_policy")
+
+func (lp *LocalPersistent) CreateStorageConnection(model.StorageConnection) error {
+	return errStorageConnUnsupported
+}
+
+func (lp *LocalPersistent) UpdateStorageConnection(model.StorageConnection) error {
+	return errStorageConnUnsupported
+}
+
+func (lp *LocalPersistent) DeleteStorageConnection(string) error {
+	return repository.ErrRecordNotFound
+}
+
+func (lp *LocalPersistent) GetStorageConnection(string) (model.StorageConnection, error) {
+	return model.StorageConnection{}, repository.ErrRecordNotFound
+}
+
+func (lp *LocalPersistent) GetAllStorageConnections() ([]model.StorageConnection, error) {
+	return []model.StorageConnection{}, nil
+}

@@ -105,6 +105,14 @@ type PersistentBackupRunService interface {
 	GetAllBackupRuns() ([]model.BackupRun, error)
 }
 
+type PersistentStorageConnectionService interface {
+	CreateStorageConnection(c model.StorageConnection) error
+	UpdateStorageConnection(c model.StorageConnection) error
+	DeleteStorageConnection(connectionID string) error
+	GetStorageConnection(connectionID string) (model.StorageConnection, error)
+	GetAllStorageConnections() ([]model.StorageConnection, error)
+}
+
 type PersistentUserService interface {
 	GetUserByName(username string) (model.CkmanUser, error)
 	UserExists(username string) bool
@@ -124,6 +132,7 @@ type PersistentMgr interface {
 	PersistentBackupPolicyService     // 新增
 	PersistentBackupRunService        // 新增
 	PersistentUserService             // 新增 — Phase 1 用户管理
+	PersistentStorageConnectionService
 }
 
 func RegistePersistent(fn func() PersistentFactory) {

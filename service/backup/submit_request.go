@@ -66,6 +66,14 @@ func (s *Service) SubmitBackupRequest(cluster string, req model.BackupRequest) (
 		}
 	}
 
+	s3cfg := req.S3
+	if req.Target == model.BACKUP_S3 && req.ConnectionID != "" {
+		var err error
+		if s3cfg, err = prepareConnectionTarget(req.ConnectionID, req.S3); err != nil {
+			return nil, err
+		}
+	}
+
 	// 同次提交的所有 policy 共享一个 taskID；taskName 由用户指定或自动生成。
 	taskID := uuid.New()
 	taskName := req.TaskName
@@ -97,7 +105,8 @@ func (s *Service) SubmitBackupRequest(cluster string, req model.BackupRequest) (
 			RangeEndDate:   req.RangeEndDate,
 			Partitions:     req.Partitions,
 			TargetType:     req.Target,
-			S3:             req.S3,
+			ConnectionID:   req.ConnectionID,
+			S3:             s3cfg,
 			Local:          req.Local,
 			Compression:    req.Compression,
 			Checksum:       req.Checksum,

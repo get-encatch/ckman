@@ -15,6 +15,7 @@ const (
 	PG_TBL_TASK          string = "tbl_task"
 	PG_TBL_BACKUP        string = "tbl_backup"
 	PG_TBL_BACKUP_POLICY string = "tbl_backup_policy"
+	PG_TBL_STORAGE_CONN  string = "tbl_storage_connection"
 	PG_TBL_BACKUP_RUN    string = "tbl_backup_run"
 	POSTGRES_TBL_USER    string = "tbl_user"
 )

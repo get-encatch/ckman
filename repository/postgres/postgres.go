@@ -107,6 +107,13 @@ func (mp *PostgresPersistent) Init(config interface{}) error {
 
 	// 新增 backup_policy / backup_run 表（postgres automigrate 有 bug，手动建）
 	backupTblSQLs := []string{
+		`CREATE TABLE IF NOT EXISTS tbl_storage_connection (
+			connection_id VARCHAR(64) PRIMARY KEY,
+			conn_name     VARCHAR(128) NOT NULL,
+			conn_type     VARCHAR(16),
+			conn_config   TEXT,
+			update_time   VARCHAR(32)
+		)`,
 		`CREATE TABLE IF NOT EXISTS tbl_backup_policy (
 			policy_id     VARCHAR(64) PRIMARY KEY,
 			cluster_name  VARCHAR(128) NOT NULL,
@@ -1092,4 +1099,85 @@ func isUniqueViolationPostgres(err error) bool {
 
 func NewPostgresPersistent() *PostgresPersistent {
 	return &PostgresPersistent{}
+}
+
+// ─── StorageConnection ───────────────────────────────────────────────────────
+
+func (mp *PostgresPersistent) CreateStorageConnection(c model.StorageConnection) error {
+	if c.CreateTime.IsZero() {
+		c.CreateTime = time.Now()
+	}
+	c.UpdateTime = time.Now()
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	tbl := TblStorageConnection{
+		ConnectionID: c.ConnectionID,
+		Name:         c.Name,
+		Type:         c.Type,
+		Config:       string(raw),
+		UpdateTime:   c.UpdateTime.Format("2006-01-02 15:04:05.999"),
+	}
+	return wrapError(mp.Client.Create(&tbl).Error)
+}
+
+func (mp *PostgresPersistent) UpdateStorageConnection(c model.StorageConnection) error {
+	c.UpdateTime = time.Now()
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	tx := mp.Client.Model(&TblStorageConnection{}).Where("connection_id = ?", c.ConnectionID).Updates(map[string]interface{}{
+		"conn_name":   c.Name,
+		"conn_type":   c.Type,
+		"conn_config": string(raw),
+		"update_time": c.UpdateTime.Format("2006-01-02 15:04:05.999"),
+	})
+	if tx.Error != nil {
+		return wrapError(tx.Error)
+	}
+	if tx.RowsAffected == 0 {
+		return repository.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (mp *PostgresPersistent) DeleteStorageConnection(connectionID string) error {
+	tx := mp.Client.Where("connection_id = ?", connectionID).Delete(&TblStorageConnection{})
+	if tx.Error != nil {
+		return wrapError(tx.Error)
+	}
+	if tx.RowsAffected == 0 {
+		return repository.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (mp *PostgresPersistent) GetStorageConnection(connectionID string) (model.StorageConnection, error) {
+	var tbl TblStorageConnection
+	if err := mp.Client.Where("connection_id = ?", connectionID).First(&tbl).Error; err != nil {
+		return model.StorageConnection{}, wrapError(err)
+	}
+	var c model.StorageConnection
+	if err := json.Unmarshal([]byte(tbl.Config), &c); err != nil {
+		return model.StorageConnection{}, errors.Wrap(err, "")
+	}
+	return c, nil
+}
+
+func (mp *PostgresPersistent) GetAllStorageConnections() ([]model.StorageConnection, error) {
+	var tbls []TblStorageConnection
+	if err := mp.Client.Order("conn_name").Find(&tbls).Error; err != nil {
+		return nil, wrapError(err)
+	}
+	out := make([]model.StorageConnection, 0, len(tbls))
+	for _, tbl := range tbls {
+		var c model.StorageConnection
+		if err := json.Unmarshal([]byte(tbl.Config), &c); err != nil {
+			return nil, errors.Wrap(err, "")
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }

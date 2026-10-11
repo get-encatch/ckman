@@ -129,6 +129,50 @@ func runBackend(t *testing.T, bc backendCase) {
 	t.Run("user_crud", func(t *testing.T) { testUserCRUD(t, mgr) })
 	t.Run("query_history", func(t *testing.T) { testQueryHistory(t, mgr) })
 	t.Run("task_crud", func(t *testing.T) { testTaskCRUD(t, mgr) })
+	t.Run("storage_connection_crud", func(t *testing.T) { testStorageConnectionCRUD(t, mgr) })
+}
+
+func testStorageConnectionCRUD(t *testing.T, mgr repository.PersistentMgr) {
+	id := tagPrefix + "conn"
+	_ = mgr.DeleteStorageConnection(id)
+	c := model.StorageConnection{
+		ConnectionID: id, Name: tagPrefix + "minio", Type: model.STORAGE_CONN_S3,
+		S3: model.TargetS3{Endpoint: "http://10.0.0.9:9000", AccessKeyID: "AK", SecretAccessKey: "encrypted-secret", Region: "us-east-1"},
+	}
+	if err := mgr.CreateStorageConnection(c); err != nil {
+		t.Fatalf("CreateStorageConnection: %v", err)
+	}
+	defer mgr.DeleteStorageConnection(id)
+	got, err := mgr.GetStorageConnection(id)
+	if err != nil {
+		t.Fatalf("GetStorageConnection: %v", err)
+	}
+	if got.S3.Endpoint != c.S3.Endpoint || got.S3.SecretAccessKey != c.S3.SecretAccessKey || got.Name != c.Name {
+		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+	c.Name = tagPrefix + "minio-renamed"
+	if err := mgr.UpdateStorageConnection(c); err != nil {
+		t.Fatalf("UpdateStorageConnection: %v", err)
+	}
+	all, err := mgr.GetAllStorageConnections()
+	if err != nil {
+		t.Fatalf("GetAllStorageConnections: %v", err)
+	}
+	found := false
+	for _, x := range all {
+		if x.ConnectionID == id && x.Name == c.Name {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("updated connection not listed: %+v", all)
+	}
+	if err := mgr.DeleteStorageConnection(id); err != nil {
+		t.Fatalf("DeleteStorageConnection: %v", err)
+	}
+	if _, err := mgr.GetStorageConnection(id); err == nil {
+		t.Fatal("connection still readable after delete")
+	}
 }
 
 const tagPrefix = "dbtest_"

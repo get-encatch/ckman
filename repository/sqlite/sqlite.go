@@ -82,6 +82,7 @@ func (sp *SQLitePersistent) Init(cfgIn interface{}) error {
 		&TblBackupRun{},
 		&TblMeta{},
 		&TblUser{},
+		&TblStorageConnection{},
 	); err != nil {
 		return errors.Wrap(err, "")
 	}
@@ -997,3 +998,84 @@ func isUniqueViolation(err error) bool {
 
 // Compile-time guarantee that *SQLitePersistent satisfies PersistentMgr.
 var _ repository.PersistentMgr = (*SQLitePersistent)(nil)
+
+// ─── StorageConnection ───────────────────────────────────────────────────────
+
+func (sp *SQLitePersistent) CreateStorageConnection(c model.StorageConnection) error {
+	if c.CreateTime.IsZero() {
+		c.CreateTime = time.Now()
+	}
+	c.UpdateTime = time.Now()
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	tbl := TblStorageConnection{
+		ConnectionID: c.ConnectionID,
+		Name:         c.Name,
+		Type:         c.Type,
+		Config:       string(raw),
+		UpdateTime:   c.UpdateTime.Format("2006-01-02 15:04:05.999"),
+	}
+	return wrapError(sp.Client.Create(&tbl).Error)
+}
+
+func (sp *SQLitePersistent) UpdateStorageConnection(c model.StorageConnection) error {
+	c.UpdateTime = time.Now()
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return errors.Wrap(err, "")
+	}
+	tx := sp.Client.Model(&TblStorageConnection{}).Where("connection_id = ?", c.ConnectionID).Updates(map[string]interface{}{
+		"conn_name":   c.Name,
+		"conn_type":   c.Type,
+		"conn_config": string(raw),
+		"update_time": c.UpdateTime.Format("2006-01-02 15:04:05.999"),
+	})
+	if tx.Error != nil {
+		return wrapError(tx.Error)
+	}
+	if tx.RowsAffected == 0 {
+		return repository.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (sp *SQLitePersistent) DeleteStorageConnection(connectionID string) error {
+	tx := sp.Client.Where("connection_id = ?", connectionID).Delete(&TblStorageConnection{})
+	if tx.Error != nil {
+		return wrapError(tx.Error)
+	}
+	if tx.RowsAffected == 0 {
+		return repository.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (sp *SQLitePersistent) GetStorageConnection(connectionID string) (model.StorageConnection, error) {
+	var tbl TblStorageConnection
+	if err := sp.Client.Where("connection_id = ?", connectionID).First(&tbl).Error; err != nil {
+		return model.StorageConnection{}, wrapError(err)
+	}
+	var c model.StorageConnection
+	if err := json.Unmarshal([]byte(tbl.Config), &c); err != nil {
+		return model.StorageConnection{}, errors.Wrap(err, "")
+	}
+	return c, nil
+}
+
+func (sp *SQLitePersistent) GetAllStorageConnections() ([]model.StorageConnection, error) {
+	var tbls []TblStorageConnection
+	if err := sp.Client.Order("conn_name").Find(&tbls).Error; err != nil {
+		return nil, wrapError(err)
+	}
+	out := make([]model.StorageConnection, 0, len(tbls))
+	for _, tbl := range tbls {
+		var c model.StorageConnection
+		if err := json.Unmarshal([]byte(tbl.Config), &c); err != nil {
+			return nil, errors.Wrap(err, "")
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}

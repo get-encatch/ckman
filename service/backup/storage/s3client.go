@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -84,6 +85,20 @@ func NewS3Client(conf model.TargetS3) (*S3Client, error) {
 		svc:  svc,
 		conf: conf,
 	}, nil
+}
+
+// ListBuckets returns the bucket names visible to the credentials, sorted.
+func (c *S3Client) ListBuckets() ([]string, error) {
+	out, err := c.svc.ListBuckets(&s3.ListBucketsInput{})
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(out.Buckets))
+	for _, b := range out.Buckets {
+		names = append(names, aws.StringValue(b.Name))
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func (c *S3Client) CreateBucket(bucket string) error {

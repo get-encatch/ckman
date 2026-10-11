@@ -182,6 +182,15 @@ func InitRouterV1(groupV1 *gin.RouterGroup, config *config.CKManConfig, signal c
 	groupV1.GET(fmt.Sprintf("/data_manage/backup/table/:%s/:database/:table/runs", controller.ClickHouseClusterPath), dataManageController.ListRunsByTable)
 	groupV1.POST(fmt.Sprintf("/data_manage/backup/table/:%s/:database/:table/partitions/delete", controller.ClickHouseClusterPath), dataManageController.DeletePartitionRecords)
 	groupV1.GET(fmt.Sprintf("/data_manage/disks/:%s", controller.ClickHouseClusterPath), dataManageController.GetClusterDisks)
+
+	storageConnController := controller.NewStorageConnectionController(WrapMsg)
+	groupV1.GET("/storage/connections", storageConnController.List)
+	groupV1.POST("/storage/connections", storageConnController.Create)
+	groupV1.POST("/storage/connections/test", storageConnController.Test)
+	groupV1.PUT("/storage/connections/:id", storageConnController.Update)
+	groupV1.DELETE("/storage/connections/:id", storageConnController.Delete)
+	groupV1.GET("/storage/connections/:id/buckets", storageConnController.Buckets)
+	groupV1.POST("/storage/connections/:id/buckets", storageConnController.CreateBucket)
 	groupV1.GET(fmt.Sprintf("/data_manage/tables/:%s/:database/summary", controller.ClickHouseClusterPath), dataManageController.GetTablePartitionSummary)
 
 	groupV1.GET("/user/me", userController.Me)

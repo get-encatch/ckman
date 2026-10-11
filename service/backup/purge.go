@@ -218,6 +218,11 @@ func (s *Service) assembleStorageForPurge(policyID string, cc model.CKManClickHo
 		warnf("policy %s not found; its remote data not cleaned", policyID)
 		return nil
 	}
+	policy, rerr := ResolvePolicyTarget(policy)
+	if rerr != nil {
+		warnf("policy %s: %v; remote data not cleaned", policyID, rerr)
+		return nil
+	}
 	st := s.makeStorage(policy, cc)
 	if st == nil {
 		warnf("policy %s: unsupported target %q; remote data not cleaned", policyID, policy.TargetType)

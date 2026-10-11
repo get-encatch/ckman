@@ -40,8 +40,15 @@ func (s *Service) UpdatePolicy(p model.BackupPolicy) error {
 	}); err != nil {
 		return err
 	}
-	// Sensitive 字段保留：前端编辑时通常不重传 secret，空值应解释为「不变」而非清空。
-	if p.S3.SecretAccessKey == "" {
+	if p.TargetType == model.BACKUP_S3 && p.ConnectionID != "" {
+		// Credentials come from the saved connection; the policy keeps only its bucket.
+		s3, err := prepareConnectionTarget(p.ConnectionID, p.S3)
+		if err != nil {
+			return err
+		}
+		p.S3 = s3
+	} else if p.S3.SecretAccessKey == "" {
+		// Sensitive 字段保留：前端编辑时通常不重传 secret，空值应解释为「不变」而非清空。
 		p.S3.SecretAccessKey = old.S3.SecretAccessKey
 	}
 	p.CreateTime = old.CreateTime
