@@ -65,11 +65,15 @@ func root(conf *model.CKManClickHouseConfig, ext model.CkDeployExt) map[string]i
 	return output
 }
 
-func prometheus() map[string]interface{} {
+func prometheus(conf *model.CKManClickHouseConfig) map[string]interface{} {
+	port := 9363
+	if conf.Docker != nil && conf.Docker.Ports.Prometheus != 0 {
+		port = conf.Docker.Ports.Prometheus
+	}
 	output := make(map[string]interface{})
 	output["prometheus"] = map[string]interface{}{
 		"endpoint":             "/metrics",
-		"port":                 9363,
+		"port":                 port,
 		"metrics":              true,
 		"events":               true,
 		"asynchronous_metrics": true,
@@ -316,7 +320,8 @@ func GenerateCustomXML(filename string, conf *model.CKManClickHouseConfig, ext m
 	mergo.Merge(&custom, logger(conf))
 	mergo.Merge(&custom, system_log())
 	mergo.Merge(&custom, distributed_ddl(conf.Cluster))
-	mergo.Merge(&custom, prometheus())
+	mergo.Merge(&custom, prometheus(conf))
+	mergo.Merge(&custom, dockerPorts(conf))
 	if conf.Secure {
 		mergo.Merge(&custom, openssl(conf))
 	}
@@ -344,4 +349,20 @@ func GenerateCustomXML(filename string, conf *model.CKManClickHouseConfig, ext m
 		return filename, err
 	}
 	return filename, nil
+}
+
+// dockerPorts gives a Docker-mode cluster its own interserver port and drops
+// the image's default MySQL/PostgreSQL ports, so clusters sharing a machine
+// on host networking don't collide.
+func dockerPorts(conf *model.CKManClickHouseConfig) map[string]interface{} {
+	output := make(map[string]interface{})
+	if conf.Docker == nil {
+		return output
+	}
+	if conf.Docker.Ports.Interserver != 0 {
+		output["interserver_http_port"] = conf.Docker.Ports.Interserver
+	}
+	output["mysql_port[@remove=\"remove\"]"] = ""
+	output["postgresql_port[@remove=\"remove\"]"] = ""
+	return output
 }

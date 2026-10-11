@@ -127,6 +127,7 @@ type CKManClickHouseConfig struct {
 	// don't need to regist to schema
 	Mode     string `json:"mode" swaggerignore:"true"`
 	NeedSudo bool   `json:"needSudo" swaggerignore:"true"`
+	Docker *DockerConf `json:"docker,omitempty" swaggerignore:"true"` // fleet clusters: containers on machines
 }
 
 // TlsConf 保存集群的服务端 TLS 证书。全集群共用一套，随集群配置一起落库。
@@ -356,7 +357,7 @@ func (config *CKManClickHouseConfig) Normalize() {
 		config.Keeper = Zookeeper
 	}
 
-	if !strings.HasSuffix(config.PkgType, "tgz") {
+	if !strings.HasSuffix(config.PkgType, "tgz") && !config.IsDocker() {
 		config.Cwd = ""
 	}
 

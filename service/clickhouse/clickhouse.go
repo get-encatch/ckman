@@ -17,6 +17,7 @@ import (
 	"github.com/housepower/ckman/model"
 	"github.com/housepower/ckman/repository"
 	"github.com/housepower/ckman/service/clickhouse/rebalance"
+	"github.com/housepower/ckman/service/fleet"
 	"github.com/pkg/errors"
 )
 
@@ -258,6 +259,9 @@ func GetCkClusterStatus(conf *model.CKManClickHouseConfig) []model.CkClusterNode
 		})
 	}
 	wg.Wait()
+	if conf.IsDocker() {
+		fleet.WarmStats(conf.Hosts)
+	}
 	for i, shard := range conf.Shards {
 		for j, replica := range shard.Replicas {
 			status := model.CkClusterNode{
@@ -272,11 +276,32 @@ func GetCkClusterStatus(conf *model.CKManClickHouseConfig) []model.CkClusterNode
 				Cpu:           cpuMap[replica.Ip],
 				Memory:        memoryMap[replica.Ip],
 			}
+			if conf.IsDocker() && status.Status == model.CkStatusGreen {
+				dockerNodeUsage(conf.Cluster, &status)
+			}
 			statusList[index] = status
 			index++
 		}
 	}
 	return statusList
+}
+
+// dockerNodeUsage reports a Docker node's container against its limits
+// instead of the whole machine.
+func dockerNodeUsage(cluster string, s *model.CkClusterNode) {
+	c, ok := fleet.Container(cluster, "clickhouse", s.Ip)
+	if !ok {
+		return
+	}
+	if c.CPULimit > 0 {
+		s.Cpu = fmt.Sprintf("%.2f / %g", c.CPUPercent/100, c.CPULimit)
+	}
+	if c.MemLimit > 0 {
+		s.Memory = fmt.Sprintf("%s / %s", fleet.HumanBytes(c.MemUsed), fleet.HumanBytes(c.MemLimit))
+	}
+	if c.DiskLimit > 0 {
+		s.Disk = fmt.Sprintf("%s / %s", fleet.HumanBytes(c.DiskUsed), fleet.HumanBytes(c.DiskLimit))
+	}
 }
 
 // tableMetricsIndexMinVersion system.parts 的 secondary_indices_* 系列字段自 CH 20.4 起提供。

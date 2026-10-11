@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/housepower/ckman/model"
 	"github.com/housepower/ckman/service/fleet"
+	"github.com/housepower/ckman/service/fleetdeploy"
 )
 
 // FleetController manages the machines that host containerised ClickHouse
@@ -107,4 +108,60 @@ func (fc *FleetController) FleetStats(c *gin.Context) {
 		return
 	}
 	fc.wrapfunc(c, model.E_SUCCESS, s)
+}
+
+// Versions: GET /fleet/versions?image=server|keeper lists Docker Hub tags.
+func (fc *FleetController) Versions(c *gin.Context) {
+	repo := model.DefaultClickHouseImage
+	if c.Query("image") == "keeper" {
+		repo = model.DefaultKeeperImage
+	}
+	tags, err := fleet.ImageVersions(repo)
+	if err != nil {
+		fc.wrapfunc(c, model.E_DATA_SELECT_FAILED, err)
+		return
+	}
+	fc.wrapfunc(c, model.E_SUCCESS, tags)
+}
+
+// PlanCluster: POST /fleet/clusters/plan checks a placement without deploying.
+func (fc *FleetController) PlanCluster(c *gin.Context) {
+	var req fleetdeploy.ClusterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fc.wrapfunc(c, model.E_INVALID_PARAMS, err)
+		return
+	}
+	plan, _ := fleetdeploy.MakePlan(req)
+	fc.wrapfunc(c, model.E_SUCCESS, plan)
+}
+
+// CreateCluster: POST /fleet/clusters deploys a cluster as containers.
+func (fc *FleetController) CreateCluster(c *gin.Context) {
+	var req fleetdeploy.ClusterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fc.wrapfunc(c, model.E_INVALID_PARAMS, err)
+		return
+	}
+	taskID, plan, err := fleetdeploy.Create(req)
+	if err != nil {
+		fc.wrapfunc(c, model.E_DATA_CHECK_FAILED, err)
+		return
+	}
+	fc.wrapfunc(c, model.E_SUCCESS, gin.H{"task_id": taskID, "plan": plan})
+}
+
+// ResizeCluster: PUT /fleet/cluster/:cluster/resources changes container
+// limits live.
+func (fc *FleetController) ResizeCluster(c *gin.Context) {
+	var r fleetdeploy.Resources
+	if err := c.ShouldBindJSON(&r); err != nil {
+		fc.wrapfunc(c, model.E_INVALID_PARAMS, err)
+		return
+	}
+	done, err := fleetdeploy.Resize(c.Param("cluster"), r)
+	if err != nil {
+		fc.wrapfunc(c, model.E_DATA_UPDATE_FAILED, err)
+		return
+	}
+	fc.wrapfunc(c, model.E_SUCCESS, gin.H{"resized": done})
 }

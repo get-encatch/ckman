@@ -152,11 +152,17 @@ func (d *CKDeploy) Init() error {
 		return lastError
 	}
 
+	if d.Conf.IsDocker() {
+		limitsHostInfo(d.Conf, d.HostInfos, &d.Ext)
+	}
 	log.Logger.Infof("init done")
 	return nil
 }
 
 func (d *CKDeploy) Prepare() error {
+	if d.Conf.IsDocker() {
+		return d.dockerPrepare()
+	}
 	d.Conf.Normalize()
 	files := make([]string, 0)
 	for _, file := range d.Packages.PkgLists {
@@ -194,6 +200,9 @@ func (d *CKDeploy) Prepare() error {
 }
 
 func (d *CKDeploy) Install() error {
+	if d.Conf.IsDocker() {
+		return d.dockerInstall()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	cmds := make([]string, 0)
@@ -263,6 +272,9 @@ func (d *CKDeploy) Install() error {
 }
 
 func (d *CKDeploy) Uninstall() error {
+	if d.Conf.IsDocker() {
+		return d.dockerUninstall()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	cmds := make([]string, 0)
@@ -305,6 +317,9 @@ func (d *CKDeploy) Uninstall() error {
 }
 
 func (d *CKDeploy) Upgrade() error {
+	if d.Conf.IsDocker() {
+		return d.dockerUpgrade()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	cmd := cmdIns.UpgradeCmd(CkSvrName, d.Packages)
@@ -344,6 +359,11 @@ func (d *CKDeploy) Upgrade() error {
 }
 
 func (d *CKDeploy) Config() error {
+	if d.Conf.IsDocker() {
+		// configs are uploaded as root with mode 0600: hand them to the
+		// container's clickhouse user so running servers can reload them
+		defer func() { _ = d.dockerOwnConfigs() }()
+	}
 	d.Conf.Normalize()
 	confFiles := make([]string, 0)
 
@@ -588,6 +608,9 @@ func (d *CKDeploy) Config() error {
 }
 
 func (d *CKDeploy) Start() error {
+	if d.Conf.IsDocker() {
+		return d.dockerStart()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	var lastError error
@@ -644,6 +667,9 @@ func (d *CKDeploy) Start() error {
 }
 
 func (d *CKDeploy) Stop() error {
+	if d.Conf.IsDocker() {
+		return d.dockerStop()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	var lastError error
@@ -679,6 +705,9 @@ func (d *CKDeploy) Stop() error {
 }
 
 func (d *CKDeploy) Restart() error {
+	if d.Conf.IsDocker() {
+		return d.dockerRestart()
+	}
 	d.Conf.Normalize()
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	var lastError error

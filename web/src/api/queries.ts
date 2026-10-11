@@ -40,6 +40,7 @@ export type Cluster = {
   authenticateType: number
   sshPort: number
   mode: "deploy" | "import"
+  docker?: import("./fleet").DockerConf // runs as containers on fleet machines
 }
 
 export const clusterListQuery = () =>

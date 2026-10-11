@@ -108,6 +108,11 @@ function ClusterLayout() {
               </h1>
               <ClusterHealth status={status.data?.status} />
               {!deployed && <Badge variant="secondary">Imported</Badge>}
+              {c?.docker && (
+                <Badge variant="secondary">
+                  Containers · port {c.docker.ports.tcp}
+                </Badge>
+              )}
             </div>
             {c ? (
               <p className="text-sm text-muted-foreground">

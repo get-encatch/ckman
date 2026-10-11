@@ -18,6 +18,7 @@ import { Route as AppUsersRouteImport } from './routes/_app/users'
 import { Route as AppClustersIndexRouteImport } from './routes/_app/clusters/index'
 import { Route as AppClustersClusterRouteImport } from './routes/_app/clusters/$cluster'
 import { Route as AppClustersNewRouteImport } from './routes/_app/clusters/new'
+import { Route as AppClustersNewPackagesRouteImport } from './routes/_app/clusters/new-packages'
 import { Route as AppMachinesIndexRouteImport } from './routes/_app/machines/index'
 import { Route as AppMachinesMachineIdRouteImport } from './routes/_app/machines/$machineId'
 import { Route as AppTasksIndexRouteImport } from './routes/_app/tasks/index'
@@ -73,6 +74,11 @@ const AppClustersClusterRoute = AppClustersClusterRouteImport.update({
 const AppClustersNewRoute = AppClustersNewRouteImport.update({
   id: '/clusters/new',
   path: '/clusters/new',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppClustersNewPackagesRoute = AppClustersNewPackagesRouteImport.update({
+  id: '/clusters/new-packages',
+  path: '/clusters/new-packages',
   getParentRoute: () => AppRoute,
 } as any)
 const AppMachinesIndexRoute = AppMachinesIndexRouteImport.update({
@@ -149,6 +155,7 @@ export interface FileRoutesByFullPath {
   '/users': typeof AppUsersRoute
   '/clusters/$cluster': typeof AppClustersClusterRouteWithChildren
   '/clusters/new': typeof AppClustersNewRoute
+  '/clusters/new-packages': typeof AppClustersNewPackagesRoute
   '/machines/$machineId': typeof AppMachinesMachineIdRoute
   '/tasks/$taskId': typeof AppTasksTaskIdRoute
   '/clusters/': typeof AppClustersIndexRoute
@@ -170,6 +177,7 @@ export interface FileRoutesByTo {
   '/users': typeof AppUsersRoute
   '/': typeof AppIndexRoute
   '/clusters/new': typeof AppClustersNewRoute
+  '/clusters/new-packages': typeof AppClustersNewPackagesRoute
   '/machines/$machineId': typeof AppMachinesMachineIdRoute
   '/tasks/$taskId': typeof AppTasksTaskIdRoute
   '/clusters': typeof AppClustersIndexRoute
@@ -194,6 +202,7 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/clusters/$cluster': typeof AppClustersClusterRouteWithChildren
   '/_app/clusters/new': typeof AppClustersNewRoute
+  '/_app/clusters/new-packages': typeof AppClustersNewPackagesRoute
   '/_app/machines/$machineId': typeof AppMachinesMachineIdRoute
   '/_app/tasks/$taskId': typeof AppTasksTaskIdRoute
   '/_app/clusters/': typeof AppClustersIndexRoute
@@ -218,6 +227,7 @@ export interface FileRouteTypes {
     | '/users'
     | '/clusters/$cluster'
     | '/clusters/new'
+    | '/clusters/new-packages'
     | '/machines/$machineId'
     | '/tasks/$taskId'
     | '/clusters/'
@@ -239,6 +249,7 @@ export interface FileRouteTypes {
     | '/users'
     | '/'
     | '/clusters/new'
+    | '/clusters/new-packages'
     | '/machines/$machineId'
     | '/tasks/$taskId'
     | '/clusters'
@@ -262,6 +273,7 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/clusters/$cluster'
     | '/_app/clusters/new'
+    | '/_app/clusters/new-packages'
     | '/_app/machines/$machineId'
     | '/_app/tasks/$taskId'
     | '/_app/clusters/'
@@ -345,6 +357,13 @@ declare module '@tanstack/react-router' {
       path: '/clusters/new'
       fullPath: '/clusters/new'
       preLoaderRoute: typeof AppClustersNewRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/clusters/new-packages': {
+      id: '/_app/clusters/new-packages'
+      path: '/clusters/new-packages'
+      fullPath: '/clusters/new-packages'
+      preLoaderRoute: typeof AppClustersNewPackagesRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/machines/': {
@@ -466,6 +485,7 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppClustersClusterRoute: typeof AppClustersClusterRouteWithChildren
   AppClustersNewRoute: typeof AppClustersNewRoute
+  AppClustersNewPackagesRoute: typeof AppClustersNewPackagesRoute
   AppMachinesMachineIdRoute: typeof AppMachinesMachineIdRoute
   AppTasksTaskIdRoute: typeof AppTasksTaskIdRoute
   AppClustersIndexRoute: typeof AppClustersIndexRoute
@@ -480,6 +500,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppClustersClusterRoute: AppClustersClusterRouteWithChildren,
   AppClustersNewRoute: AppClustersNewRoute,
+  AppClustersNewPackagesRoute: AppClustersNewPackagesRoute,
   AppMachinesMachineIdRoute: AppMachinesMachineIdRoute,
   AppTasksTaskIdRoute: AppTasksTaskIdRoute,
   AppClustersIndexRoute: AppClustersIndexRoute,

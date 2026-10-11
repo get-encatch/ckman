@@ -1,28 +1,31 @@
 import { useMemo, useState } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import {
   createFileRoute,
   Link,
   redirect,
   useNavigate,
 } from "@tanstack/react-router"
-import { RefreshCwIcon } from "lucide-react"
+import { RefreshCwIcon, WandSparklesIcon } from "lucide-react"
+import { toast } from "sonner"
 
 import { errorMessage } from "@/api/client"
 import {
-  clusterListQuery,
-  deployCluster,
-  packagesQuery,
-  type DeployRequest,
-} from "@/api/queries"
+  createFleetCluster,
+  fleetStatsQuery,
+  machinesQuery,
+  matchesFilter,
+  planCluster,
+  versionsQuery,
+  type FleetClusterRequest,
+  type FleetPlan,
+  type Machine,
+  type MachineStats,
+} from "@/api/fleet"
+import { CapacityBar, formatCores } from "@/components/app/fleet-usage"
 import { PageBody, PageHeader, Section } from "@/components/app/page-header"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import {
   Field,
   FieldDescription,
@@ -32,7 +35,6 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
   Select,
   SelectContent,
@@ -40,16 +42,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { expandHosts } from "@/lib/format"
+import { formatBytes } from "@/lib/format"
 
 export const Route = createFileRoute("/_app/clusters/new")({
   beforeLoad: ({ context }) => {
     if (context.session.policy !== "admin") throw redirect({ to: "/clusters" })
   },
-  component: CreateClusterPage,
+  component: CreateFleetClusterPage,
 })
-
-type Coordination = "keeper-standalone" | "keeper-internal" | "zookeeper"
 
 function randomPassword() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
@@ -57,235 +57,283 @@ function randomPassword() {
   return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("")
 }
 
-function CreateClusterPage() {
-  const packages = useQuery(packagesQuery("all"))
-  const existing = useQuery(clusterListQuery())
-  const queryClient = useQueryClient()
+type Sizes = {
+  cpu: string
+  memory_mb: string
+  disk_gb: string
+  keeper_cpu: string
+  keeper_memory_mb: string
+  keeper_disk_gb: string
+}
+
+const resize = <T,>(arr: T[], n: number, fill: () => T) =>
+  Array.from({ length: n }, (_, i) => arr[i] ?? fill())
+
+function CreateFleetClusterPage() {
   const navigate = useNavigate()
+  const machines = useQuery(machinesQuery())
+  const stats = useQuery(fleetStatsQuery())
+  const versions = useQuery(versionsQuery())
 
   const [name, setName] = useState("")
   const [comment, setComment] = useState("")
-  const [pkg, setPkg] = useState<string | null>(null)
-  const [shards, setShards] = useState(2)
-  const [replicas, setReplicas] = useState(2)
-  const [ips, setIps] = useState<string[][]>([])
-  const [coordination, setCoordination] =
-    useState<Coordination>("keeper-standalone")
-  const [keeperNodes, setKeeperNodes] = useState("")
-  const [zkPort, setZkPort] = useState(2181)
-  const [cwd, setCwd] = useState("/opt/clickhouse/")
-  const [dataPath, setDataPath] = useState("/var/lib/")
-  const [keeperPath, setKeeperPath] = useState("/var/lib/clickhouse-keeper/")
-  const [chPassword, setChPassword] = useState(randomPassword)
-  const [sshUser, setSshUser] = useState("root")
-  const [sshAuth, setSshAuth] = useState("2")
-  const [sshPassword, setSshPassword] = useState("")
-  const [sshPort, setSshPort] = useState(22)
-  const [port, setPort] = useState(9000)
-  const [httpPort, setHttpPort] = useState(8123)
-  const [keeperTcp, setKeeperTcp] = useState(9181)
-  const [keeperRaft, setKeeperRaft] = useState(9234)
-  const [force, setForce] = useState(false)
+  const [version, setVersion] = useState<string | null>(null)
+  const [password, setPassword] = useState(randomPassword)
+  const [sizes, setSizes] = useState<Sizes>({
+    cpu: "2",
+    memory_mb: "4096",
+    disk_gb: "100",
+    keeper_cpu: "0.5",
+    keeper_memory_mb: "512",
+    keeper_disk_gb: "10",
+  })
+  const [shardCount, setShardCount] = useState(1)
+  const [replicaCount, setReplicaCount] = useState(2)
+  const [keeperCount, setKeeperCount] = useState(3)
+  const [chFilter, setChFilter] = useState("")
+  const [keeperFilter, setKeeperFilter] = useState("")
+  const [placement, setPlacement] = useState<string[][]>([["", ""]])
+  const [keepers, setKeepers] = useState<string[]>(["", "", ""])
+  const [overcommit, setOvercommit] = useState(false)
+  const [plan, setPlan] = useState<FleetPlan | null>(null)
+  const [busy, setBusy] = useState<"plan" | "create" | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
 
-  const selectedPkg = packages.data?.find(
-    (p) => `${p.pkgType}|${p.pkgName}` === pkg
+  const chosenVersion = version ?? versions.data?.[0] ?? ""
+  const ready = useMemo(
+    () => (machines.data ?? []).filter((m) => m.status === "ready"),
+    [machines.data]
   )
-  const isTgz = selectedPkg?.pkgType.endsWith("tgz") ?? true
-  const pkgItems = useMemo(
-    () =>
-      Object.fromEntries(
-        (packages.data ?? []).map((p) => [
-          `${p.pkgType}|${p.pkgName}`,
-          `${p.version} (${p.pkgType})`,
-        ])
-      ),
-    [packages.data]
+  const statsById = useMemo(
+    () => new Map((stats.data ?? []).map((s) => [s.machine_id, s])),
+    [stats.data]
   )
+  const chCandidates = ready.filter((m) => matchesFilter(m, chFilter))
+  const keeperCandidates = ready.filter((m) => matchesFilter(m, keeperFilter))
 
-  const grid = Array.from({ length: shards }, (_, s) =>
-    Array.from({ length: replicas }, (_, r) => ips[s]?.[r] ?? "")
-  )
-  const setIp = (s: number, r: number, value: string) =>
-    setIps(() => {
-      const next = grid.map((row) => [...row])
-      next[s][r] = value.trim()
-      return next
-    })
-
-  function fillFrom(text: string) {
-    const { hosts } = expandHosts(text)
-    setIps(
-      Array.from({ length: shards }, (_, s) =>
-        Array.from(
-          { length: replicas },
-          (_, r) => hosts[s * replicas + r] ?? ""
-        )
+  // any change invalidates the last plan check
+  const touch = () => {
+    setPlan(null)
+    setError(null)
+  }
+  const setSize = (k: keyof Sizes, v: string) => {
+    touch()
+    setSizes((s) => ({ ...s, [k]: v }))
+  }
+  function setLayout(shards: number, replicas: number) {
+    touch()
+    setShardCount(shards)
+    setReplicaCount(replicas)
+    setPlacement((p) =>
+      resize(p, shards, () => []).map((row) => resize(row, replicas, () => ""))
+    )
+  }
+  function setKeeperN(n: number) {
+    touch()
+    setKeeperCount(n)
+    setKeepers((k) => resize(k, n, () => ""))
+  }
+  function setSlot(shard: number, replica: number, id: string) {
+    touch()
+    setPlacement((p) =>
+      p.map((row, i) =>
+        i === shard ? row.map((v, j) => (j === replica ? id : v)) : row
       )
     )
   }
+  function setKeeperSlot(i: number, id: string) {
+    touch()
+    setKeepers((k) => k.map((v, j) => (j === i ? id : v)))
+  }
 
-  async function submit() {
-    setError(null)
-    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(name))
-      return setError("Name: start with a letter; letters, digits and _ only.")
-    if (existing.data?.some((c) => c.cluster === name))
-      return setError(`A cluster named ${name} already exists.`)
-    if (!selectedPkg)
-      return setError(
-        "Choose a ClickHouse version. Upload one on the Packages page first."
-      )
-    const all = grid.flat()
-    if (all.some((ip) => !ip))
-      return setError("Fill in an IP for every replica.")
-    if (new Set(all).size !== all.length)
-      return setError("Each node needs its own IP.")
-    const keeper = expandHosts(keeperNodes)
-    if (keeper.error) return setError(keeper.error)
-    if (coordination !== "keeper-internal" && keeper.hosts.length === 0)
-      return setError(
-        coordination === "zookeeper"
-          ? "List the ZooKeeper nodes."
-          : "List the Keeper nodes."
-      )
-    if (coordination === "keeper-internal" && isTgz)
-      return setError(
-        "Keeper inside ClickHouse needs rpm/deb packages. Use separate Keeper nodes with tgz."
-      )
-    for (const [label, path] of [
-      ["Install folder", cwd],
-      ["Data folder", dataPath],
-      ["Keeper folder", keeperPath],
-    ] as const)
-      if (!/^\/.+\/$/.test(path))
-        return setError(`${label} must start and end with /.`)
-    if (keeperPath === "/" || keeperPath === "/var/lib/")
-      return setError(
-        "Use a dedicated Keeper folder: ckman empties it when (un)installing Keeper."
-      )
-    if (sshAuth !== "2" && !sshPassword)
-      return setError("Enter the SSH password.")
-    if (!chPassword)
-      return setError("Set a password for the default ClickHouse user.")
-
-    const body: DeployRequest = {
-      Cluster: name,
-      Comment: comment || undefined,
-      PkgType: selectedPkg.pkgType,
-      PkgName: selectedPkg.pkgName,
-      Cwd: isTgz ? cwd : undefined,
-      Shards: grid.map((row) => ({ Replicas: row.map((Ip) => ({ Ip })) })),
-      Protocol: "native",
-      Port: port,
-      HttpPort: httpPort,
-      Secure: false,
-      Keeper: coordination === "zookeeper" ? "zookeeper" : "clickhouse-keeper",
-      KeeperConf:
-        coordination === "zookeeper"
-          ? undefined
-          : {
-              Runtime:
-                coordination === "keeper-internal" ? "internal" : "standalone",
-              KeeperNodes:
-                coordination === "keeper-standalone" ? keeper.hosts : undefined,
-              TcpPort: keeperTcp,
-              RaftPort: keeperRaft,
-              Path: keeperPath,
-              Coordination: {
-                OperationTimeoutMs: 10000,
-                SessionTimeoutMs: 30000,
-                ForceSync: false,
-              },
-            },
-      ZkNodes: coordination === "zookeeper" ? keeper.hosts : undefined,
-      ZkPort: zkPort,
-      Password: chPassword,
-      EncryptType: 0,
-      Path: dataPath,
-      SshUser: sshUser,
-      AuthenticateType: Number(sshAuth),
-      SshPassword: sshAuth !== "2" ? sshPassword : undefined,
-      SshPort: sshPort,
+  // Fill every slot: most free memory first, one ClickHouse per machine,
+  // replicas of a shard (and Keepers) spread over zones.
+  function autoFill() {
+    touch()
+    const free = (m: Machine) => {
+      const s = statsById.get(m.id)
+      return s ? s.mem_total - s.reserved_mem : 0
     }
-    setBusy(true)
-    try {
-      const taskId = await deployCluster(body, force)
-      await queryClient.invalidateQueries({ queryKey: ["clusters"] })
-      await navigate({ to: "/tasks/$taskId", params: { taskId } })
-    } catch (err) {
-      setError(errorMessage(err))
-    } finally {
-      setBusy(false)
+    const pool = [...chCandidates].sort((a, b) => free(b) - free(a))
+    const used = new Set<string>()
+    const next: string[][] = []
+    for (let i = 0; i < shardCount; i++) {
+      const zones = new Set<string>()
+      const row: string[] = []
+      for (let j = 0; j < replicaCount; j++) {
+        const pick =
+          pool.find((m) => !used.has(m.id) && !zones.has(m.zone)) ??
+          pool.find((m) => !used.has(m.id))
+        row.push(pick?.id ?? "")
+        if (pick) {
+          used.add(pick.id)
+          zones.add(pick.zone)
+        }
+      }
+      next.push(row)
+    }
+    setPlacement(next)
+    const kpool = [...keeperCandidates].sort(
+      (a, b) =>
+        Number(used.has(a.id)) - Number(used.has(b.id)) || free(b) - free(a)
+    )
+    const kused = new Set<string>()
+    const kzones = new Map<string, number>()
+    const kn: string[] = []
+    for (let i = 0; i < keeperCount; i++) {
+      const least = (m: Machine) => kzones.get(m.zone) ?? 0
+      const pick = kpool
+        .filter((m) => !kused.has(m.id))
+        .sort((a, b) => least(a) - least(b))[0]
+      kn.push(pick?.id ?? "")
+      if (pick) {
+        kused.add(pick.id)
+        kzones.set(pick.zone, least(pick) + 1)
+      }
+    }
+    setKeepers(kn)
+  }
+
+  function request(): FleetClusterRequest {
+    const num = (v: string) => Number(v) || 0
+    return {
+      cluster: name.trim(),
+      comment: comment.trim(),
+      version: chosenVersion,
+      shards: placement,
+      keepers,
+      password,
+      allow_overcommit: overcommit,
+      cpu: num(sizes.cpu),
+      memory_mb: num(sizes.memory_mb),
+      disk_gb: num(sizes.disk_gb),
+      keeper_cpu: num(sizes.keeper_cpu),
+      keeper_memory_mb: num(sizes.keeper_memory_mb),
+      keeper_disk_gb: num(sizes.keeper_disk_gb),
     }
   }
 
-  const keeperCount = expandHosts(keeperNodes).hosts.length
+  async function check() {
+    setBusy("plan")
+    setError(null)
+    try {
+      setPlan(await planCluster(request()))
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function create() {
+    setBusy("create")
+    setError(null)
+    try {
+      const res = await createFleetCluster(request())
+      toast.success(`Creating ${name}`)
+      await navigate({ to: "/tasks/$taskId", params: { taskId: res.task_id } })
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const machineItems = (candidates: Machine[]) =>
+    Object.fromEntries(
+      candidates.map((m) => [m.id, machineLabel(m, statsById.get(m.id))])
+    )
 
   return (
     <>
       <PageHeader
         title="Create cluster"
-        description="ckman installs ClickHouse on your servers over SSH and wires up shards, replicas and Keeper."
+        description="ClickHouse and Keeper run as containers on machines you choose. Each instance gets its own CPU, memory and disk limits."
+        actions={
+          <Button
+            variant="outline"
+            nativeButton={false}
+            render={<Link to="/clusters/new-packages" />}
+          >
+            Install packages over SSH instead
+          </Button>
+        }
       />
-      <PageBody className="max-w-3xl">
+      <PageBody className="max-w-4xl">
+        {ready.length === 0 && !machines.isPending && (
+          <FieldError>
+            No ready machines.{" "}
+            <Link to="/machines" className="underline">
+              Add machines with Docker
+            </Link>{" "}
+            first.
+          </FieldError>
+        )}
         <Section title="Basics">
           <FieldGroup>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field>
-                <FieldLabel htmlFor="c-name">Cluster name</FieldLabel>
+                <FieldLabel htmlFor="f-name">Cluster name</FieldLabel>
                 <Input
-                  id="c-name"
+                  id="f-name"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
                   placeholder="analytics"
+                  onChange={(e) => {
+                    touch()
+                    setName(e.target.value)
+                  }}
                 />
                 <FieldDescription>
-                  Used in ON CLUSTER and Distributed tables.
+                  Letters, digits and _. Used in ON CLUSTER.
                 </FieldDescription>
               </Field>
               <Field>
                 <FieldLabel>ClickHouse version</FieldLabel>
                 <Select
-                  items={pkgItems}
-                  value={pkg}
-                  onValueChange={(v) => setPkg(v as string)}
+                  items={Object.fromEntries(
+                    (versions.data ?? []).map((v, i) => [
+                      v,
+                      i === 0 ? `${v} (latest)` : v,
+                    ])
+                  )}
+                  value={chosenVersion}
+                  onValueChange={(v) => {
+                    touch()
+                    setVersion(v as string)
+                  }}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue
                       placeholder={
-                        packages.data?.length === 0
-                          ? "No packages uploaded"
-                          : "Choose a version"
+                        versions.isPending
+                          ? "Loading from Docker Hub…"
+                          : "No versions"
                       }
                     />
                   </SelectTrigger>
                   <SelectContent>
-                    {(packages.data ?? []).map((p) => (
-                      <SelectItem
-                        key={`${p.pkgType}|${p.pkgName}`}
-                        value={`${p.pkgType}|${p.pkgName}`}
-                      >
-                        {p.version} ({p.pkgType})
+                    {(versions.data ?? []).map((v, i) => (
+                      <SelectItem key={v} value={v}>
+                        {i === 0 ? `${v} (latest)` : v}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <FieldDescription>
-                  Missing one?{" "}
-                  <Link to="/packages" className="underline underline-offset-2">
-                    Upload packages
-                  </Link>
-                  .
+                  Official clickhouse/clickhouse-server and -keeper images from
+                  Docker Hub.
                 </FieldDescription>
+                {versions.error && (
+                  <FieldError>{errorMessage(versions.error)}</FieldError>
+                )}
               </Field>
             </div>
             <Field>
-              <FieldLabel htmlFor="c-comment">
+              <FieldLabel htmlFor="f-comment">
                 Description (optional)
               </FieldLabel>
               <Input
-                id="c-comment"
+                id="f-comment"
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
               />
@@ -294,378 +342,412 @@ function CreateClusterPage() {
         </Section>
 
         <Section
-          title="Shards and replicas"
-          description="Shards split the data; replicas keep copies of each shard on other servers."
+          title="Instance size"
+          description="Limits for each container. Disk is a soft limit: shown and warned about, not enforced."
         >
-          <div className="flex flex-wrap items-end gap-4">
-            <Field className="w-28">
-              <FieldLabel htmlFor="c-shards">Shards</FieldLabel>
-              <Input
-                id="c-shards"
-                type="number"
-                min={1}
-                max={64}
-                value={shards}
-                onChange={(e) =>
-                  setShards(
-                    Math.min(64, Math.max(1, Number(e.target.value) || 1))
-                  )
-                }
-              />
-            </Field>
-            <Field className="w-28">
-              <FieldLabel htmlFor="c-replicas">Replicas each</FieldLabel>
-              <Input
-                id="c-replicas"
-                type="number"
-                min={1}
-                max={8}
-                value={replicas}
-                onChange={(e) =>
-                  setReplicas(
-                    Math.min(8, Math.max(1, Number(e.target.value) || 1))
-                  )
-                }
-              />
-            </Field>
-            <Field className="min-w-60 flex-1">
-              <FieldLabel htmlFor="c-paste">
-                Fill from a list (optional)
-              </FieldLabel>
-              <Input
-                id="c-paste"
-                placeholder="10.51.40.11-14"
-                onBlur={(e) => e.target.value && fillFrom(e.target.value)}
-              />
-            </Field>
-          </div>
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2">Shard</th>
-                  {Array.from({ length: replicas }, (_, r) => (
-                    <th key={r} className="px-3 py-2">
-                      Replica {r + 1}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {grid.map((row, s) => (
-                  <tr key={s}>
-                    <td className="px-3 py-2 font-medium">{s + 1}</td>
-                    {row.map((ip, r) => (
-                      <td key={r} className="px-2 py-1.5">
-                        <Input
-                          aria-label={`Shard ${s + 1} replica ${r + 1} IP`}
-                          value={ip}
-                          onChange={(e) => setIp(s, r, e.target.value)}
-                          placeholder="IP address"
-                          className="min-w-32 font-mono"
-                        />
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SizeGroup
+              title="Each ClickHouse server"
+              cpu={sizes.cpu}
+              mem={sizes.memory_mb}
+              disk={sizes.disk_gb}
+              onCpu={(v) => setSize("cpu", v)}
+              onMem={(v) => setSize("memory_mb", v)}
+              onDisk={(v) => setSize("disk_gb", v)}
+            />
+            <SizeGroup
+              title="Each Keeper"
+              cpu={sizes.keeper_cpu}
+              mem={sizes.keeper_memory_mb}
+              disk={sizes.keeper_disk_gb}
+              onCpu={(v) => setSize("keeper_cpu", v)}
+              onMem={(v) => setSize("keeper_memory_mb", v)}
+              onDisk={(v) => setSize("keeper_disk_gb", v)}
+            />
           </div>
         </Section>
 
         <Section
-          title="Coordination"
-          description="Replication and ON CLUSTER statements need Keeper (or ZooKeeper)."
-        >
-          <RadioGroup
-            value={coordination}
-            onValueChange={(v) => setCoordination(v as Coordination)}
-            className="gap-3"
-          >
-            <Label className="flex items-start gap-2 font-normal">
-              <RadioGroupItem value="keeper-standalone" className="mt-0.5" />
-              <span>
-                ClickHouse Keeper on its own servers (recommended)
-                <span className="block text-xs text-muted-foreground">
-                  Use 3 small servers so Keeper survives one failure.
-                </span>
-              </span>
-            </Label>
-            <Label className="flex items-start gap-2 font-normal">
-              <RadioGroupItem
-                value="keeper-internal"
-                className="mt-0.5"
-                disabled={isTgz}
-              />
-              <span className={isTgz ? "text-muted-foreground" : undefined}>
-                ClickHouse Keeper inside the ClickHouse servers
-                <span className="block text-xs text-muted-foreground">
-                  Fewer servers; needs rpm/deb packages.
-                </span>
-              </span>
-            </Label>
-            <Label className="flex items-start gap-2 font-normal">
-              <RadioGroupItem value="zookeeper" className="mt-0.5" />
-              <span>
-                An existing ZooKeeper ensemble
-                <span className="block text-xs text-muted-foreground">
-                  ckman doesn't install ZooKeeper.
-                </span>
-              </span>
-            </Label>
-          </RadioGroup>
-          {coordination !== "keeper-internal" && (
-            <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
-              <Field>
-                <FieldLabel htmlFor="c-keeper">
-                  {coordination === "zookeeper"
-                    ? "ZooKeeper nodes"
-                    : "Keeper servers"}
-                </FieldLabel>
-                <Input
-                  id="c-keeper"
-                  value={keeperNodes}
-                  onChange={(e) => setKeeperNodes(e.target.value)}
-                  placeholder="10.51.40.21-23"
-                  className="font-mono"
-                />
-                {coordination === "keeper-standalone" &&
-                  keeperCount > 0 &&
-                  keeperCount % 2 === 0 && (
-                    <FieldDescription className="text-amber-700 dark:text-amber-400">
-                      Use an odd number ({keeperCount + 1}): {keeperCount}{" "}
-                      Keeper servers tolerate no more failures than{" "}
-                      {keeperCount - 1}.
-                    </FieldDescription>
-                  )}
-              </Field>
-              {coordination === "zookeeper" && (
-                <Field>
-                  <FieldLabel htmlFor="c-zkport">Port</FieldLabel>
-                  <Input
-                    id="c-zkport"
-                    type="number"
-                    value={zkPort}
-                    onChange={(e) => setZkPort(Number(e.target.value))}
-                  />
-                </Field>
-              )}
-            </div>
-          )}
-        </Section>
-
-        <Section
-          title="Access"
-          description="ckman needs SSH as root or a sudo user on every server."
+          title="Placement"
+          description="Choose the machine for every ClickHouse replica and every Keeper. A machine runs at most one ClickHouse server of this cluster."
+          actions={
+            <Button variant="outline" size="sm" onClick={autoFill}>
+              <WandSparklesIcon /> Fill automatically
+            </Button>
+          }
         >
           <FieldGroup>
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-4">
               <Field>
-                <FieldLabel htmlFor="c-sshuser">SSH user</FieldLabel>
+                <FieldLabel htmlFor="f-shards">Shards</FieldLabel>
                 <Input
-                  id="c-sshuser"
-                  value={sshUser}
-                  onChange={(e) => setSshUser(e.target.value)}
+                  id="f-shards"
+                  type="number"
+                  min={1}
+                  max={32}
+                  value={shardCount}
+                  onChange={(e) =>
+                    setLayout(
+                      Math.max(1, Math.min(32, Number(e.target.value) || 1)),
+                      replicaCount
+                    )
+                  }
                 />
               </Field>
               <Field>
-                <FieldLabel>Sign in with</FieldLabel>
+                <FieldLabel htmlFor="f-replicas">Replicas each</FieldLabel>
+                <Input
+                  id="f-replicas"
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={replicaCount}
+                  onChange={(e) =>
+                    setLayout(
+                      shardCount,
+                      Math.max(1, Math.min(8, Number(e.target.value) || 1))
+                    )
+                  }
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="f-chfilter">ClickHouse on</FieldLabel>
+                <Input
+                  id="f-chfilter"
+                  value={chFilter}
+                  placeholder="role=clickhouse"
+                  onChange={(e) => setChFilter(e.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="f-kfilter">Keeper on</FieldLabel>
+                <Input
+                  id="f-kfilter"
+                  value={keeperFilter}
+                  placeholder="role=keeper"
+                  onChange={(e) => setKeeperFilter(e.target.value)}
+                />
+              </Field>
+            </div>
+            <FieldDescription>
+              Filters narrow the machine lists by label or zone, e.g.
+              &quot;role=clickhouse zone=zone-a&quot;. Leave empty for all ready
+              machines.
+            </FieldDescription>
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Shard</th>
+                    {Array.from({ length: replicaCount }, (_, j) => (
+                      <th key={j} className="px-3 py-2 font-medium">
+                        Replica {j + 1}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {placement.map((row, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="px-3 py-2 tabular-nums">{i + 1}</td>
+                      {row.map((id, j) => (
+                        <td key={j} className="min-w-52 px-3 py-2">
+                          <MachineSelect
+                            label={`Shard ${i + 1} replica ${j + 1} machine`}
+                            items={machineItems(chCandidates)}
+                            candidates={chCandidates}
+                            value={id}
+                            onChange={(v) => setSlot(i, j, v)}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="grid items-end gap-4 sm:grid-cols-[8rem_1fr]">
+              <Field>
+                <FieldLabel>Keepers</FieldLabel>
                 <Select
-                  items={{
-                    "2": "SSH key",
-                    "0": "Password (stored)",
-                    "1": "Password (asked each time)",
-                  }}
-                  value={sshAuth}
-                  onValueChange={(v) => setSshAuth(v as string)}
+                  items={{ "1": "1", "3": "3", "5": "5" }}
+                  value={String(keeperCount)}
+                  onValueChange={(v) => setKeeperN(Number(v))}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="2">SSH key</SelectItem>
-                    <SelectItem value="0">Password (stored)</SelectItem>
-                    <SelectItem value="1">
-                      Password (asked each time)
-                    </SelectItem>
+                    {["1", "3", "5"].map((n) => (
+                      <SelectItem key={n} value={n}>
+                        {n}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </Field>
-              <Field>
-                <FieldLabel htmlFor="c-sshport">SSH port</FieldLabel>
-                <Input
-                  id="c-sshport"
-                  type="number"
-                  value={sshPort}
-                  onChange={(e) => setSshPort(Number(e.target.value))}
-                />
-              </Field>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {keepers.map((id, i) => (
+                  <MachineSelect
+                    key={i}
+                    label={`Keeper ${i + 1} machine`}
+                    items={machineItems(keeperCandidates)}
+                    candidates={keeperCandidates}
+                    value={id}
+                    onChange={(v) => setKeeperSlot(i, v)}
+                  />
+                ))}
+              </div>
             </div>
-            {sshAuth === "2" ? (
-              <FieldDescription>
-                ckman uses the private key in its conf/id_rsa file. Add the
-                matching public key to the SSH user's authorized_keys on every
-                server.
-              </FieldDescription>
-            ) : (
-              <Field>
-                <FieldLabel htmlFor="c-sshpw">SSH password</FieldLabel>
-                <Input
-                  id="c-sshpw"
-                  type="password"
-                  autoComplete="new-password"
-                  value={sshPassword}
-                  onChange={(e) => setSshPassword(e.target.value)}
-                />
-              </Field>
-            )}
+            <FieldDescription>
+              3 Keepers survive one failure. Spread them over machines (and
+              zones); production prefers machines without ClickHouse.
+            </FieldDescription>
+          </FieldGroup>
+        </Section>
+
+        <Section title="Access">
+          <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="c-chpw">
-                Password for ClickHouse's "default" user
+              <FieldLabel htmlFor="f-pass">
+                Password for ClickHouse&apos;s &quot;default&quot; user
               </FieldLabel>
               <div className="flex gap-2">
                 <Input
-                  id="c-chpw"
-                  value={chPassword}
-                  onChange={(e) => setChPassword(e.target.value)}
-                  autoComplete="off"
+                  id="f-pass"
                   className="font-mono"
+                  value={password}
+                  onChange={(e) => {
+                    touch()
+                    setPassword(e.target.value)
+                  }}
                 />
                 <Button
-                  type="button"
                   variant="outline"
                   size="icon"
-                  aria-label="Generate another"
-                  onClick={() => setChPassword(randomPassword())}
+                  aria-label="Generate a new password"
+                  onClick={() => {
+                    touch()
+                    setPassword(randomPassword())
+                  }}
                 >
                   <RefreshCwIcon />
                 </Button>
               </div>
               <FieldDescription>
-                Save it somewhere safe; you'll need it to connect your apps.
+                Save it somewhere safe; your apps connect with it.
               </FieldDescription>
             </Field>
+            <Label className="flex items-center gap-2 font-normal">
+              <Checkbox
+                checked={overcommit}
+                onCheckedChange={(v) => {
+                  touch()
+                  setOvercommit(v === true)
+                }}
+              />
+              Allow overcommit (reserve more than a machine has)
+            </Label>
           </FieldGroup>
         </Section>
 
-        <Collapsible>
-          <CollapsibleTrigger
-            render={<Button variant="ghost" size="sm" className="-ml-2" />}
+        {plan && <PlanReview plan={plan} />}
+        {error && <FieldError>{error}</FieldError>}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant={plan ? "outline" : "default"}
+            disabled={busy !== null}
+            onClick={() => void check()}
           >
-            Folders and ports
-          </CollapsibleTrigger>
-          <CollapsibleContent className="pt-3">
-            <div className="grid gap-4 sm:grid-cols-2">
-              {isTgz && (
-                <Field>
-                  <FieldLabel htmlFor="c-cwd">Install folder</FieldLabel>
-                  <Input
-                    id="c-cwd"
-                    value={cwd}
-                    onChange={(e) => setCwd(e.target.value)}
-                    className="font-mono"
-                  />
-                </Field>
-              )}
-              <Field>
-                <FieldLabel htmlFor="c-data">Data folder</FieldLabel>
-                <Input
-                  id="c-data"
-                  value={dataPath}
-                  onChange={(e) => setDataPath(e.target.value)}
-                  className="font-mono"
-                />
-                <FieldDescription>
-                  Data goes in a "clickhouse" folder inside it.
-                </FieldDescription>
-              </Field>
-              {coordination !== "zookeeper" && (
-                <Field>
-                  <FieldLabel htmlFor="c-kpath">Keeper folder</FieldLabel>
-                  <Input
-                    id="c-kpath"
-                    value={keeperPath}
-                    onChange={(e) => setKeeperPath(e.target.value)}
-                    className="font-mono"
-                  />
-                  <FieldDescription>
-                    Must already exist on every server. Use a folder only Keeper
-                    uses.
-                  </FieldDescription>
-                </Field>
-              )}
-              <Field>
-                <FieldLabel htmlFor="c-port">Native port</FieldLabel>
-                <Input
-                  id="c-port"
-                  type="number"
-                  value={port}
-                  onChange={(e) => setPort(Number(e.target.value))}
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="c-http">HTTP port</FieldLabel>
-                <Input
-                  id="c-http"
-                  type="number"
-                  value={httpPort}
-                  onChange={(e) => setHttpPort(Number(e.target.value))}
-                />
-              </Field>
-              {coordination !== "zookeeper" && (
-                <>
-                  <Field>
-                    <FieldLabel htmlFor="c-ktcp">Keeper client port</FieldLabel>
-                    <Input
-                      id="c-ktcp"
-                      type="number"
-                      value={keeperTcp}
-                      onChange={(e) => setKeeperTcp(Number(e.target.value))}
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="c-kraft">Keeper raft port</FieldLabel>
-                    <Input
-                      id="c-kraft"
-                      type="number"
-                      value={keeperRaft}
-                      onChange={(e) => setKeeperRaft(Number(e.target.value))}
-                    />
-                  </Field>
-                </>
-              )}
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
-
-        <div className="flex flex-col gap-3 border-t pt-6">
-          <Label className="flex items-center gap-2 font-normal">
-            <Checkbox
-              checked={force}
-              onCheckedChange={(v) => setForce(v === true)}
-            />
-            Overwrite servers that already run ClickHouse
-          </Label>
-          {error && <FieldError>{error}</FieldError>}
-          <div className="flex gap-2">
-            <Button onClick={() => void submit()} disabled={busy}>
-              {busy ? "Checking servers…" : "Create cluster"}
-            </Button>
-            <Button
-              variant="outline"
-              render={<Link to="/clusters" />}
-              nativeButton={false}
-            >
-              Cancel
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            ckman first checks SSH access, folders and CPU architecture on every
-            server, then installs in the background. You'll see the progress
-            next.
-          </p>
+            {busy === "plan" ? "Checking…" : "Check placement"}
+          </Button>
+          <Button
+            disabled={busy !== null || !plan || plan.errors.length > 0}
+            onClick={() => void create()}
+          >
+            {busy === "create" ? "Starting…" : "Create cluster"}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {plan
+              ? plan.errors.length > 0
+                ? "Fix the problems above, then check again."
+                : "Placement checked. Changing anything needs a new check."
+              : "Check the placement first: ckman verifies machines, ports and capacity."}
+          </span>
         </div>
       </PageBody>
     </>
+  )
+}
+
+function machineLabel(m: Machine, s: MachineStats | undefined) {
+  const free = s ? formatBytes(Math.max(0, s.mem_total - s.reserved_mem)) : "?"
+  return `${m.name}${m.zone ? ` · ${m.zone}` : ""} · ${free} free`
+}
+
+function MachineSelect({
+  label,
+  items,
+  candidates,
+  value,
+  onChange,
+}: {
+  label: string
+  items: Record<string, string>
+  candidates: Machine[]
+  value: string
+  onChange: (id: string) => void
+}) {
+  return (
+    <Select
+      items={items}
+      value={value || null}
+      onValueChange={(v) => onChange((v as string) ?? "")}
+    >
+      <SelectTrigger className="w-full" aria-label={label}>
+        <SelectValue placeholder="Choose a machine" />
+      </SelectTrigger>
+      <SelectContent>
+        {candidates.map((m) => (
+          <SelectItem key={m.id} value={m.id}>
+            {items[m.id]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+function SizeGroup({
+  title,
+  cpu,
+  mem,
+  disk,
+  onCpu,
+  onMem,
+  onDisk,
+}: {
+  title: string
+  cpu: string
+  mem: string
+  disk: string
+  onCpu: (v: string) => void
+  onMem: (v: string) => void
+  onDisk: (v: string) => void
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border p-4">
+      <span className="text-sm font-medium">{title}</span>
+      <div className="grid grid-cols-3 gap-2">
+        <Field>
+          <FieldLabel>CPU cores</FieldLabel>
+          <Input
+            inputMode="decimal"
+            value={cpu}
+            onChange={(e) => onCpu(e.target.value)}
+            aria-label={`${title} CPU cores`}
+          />
+        </Field>
+        <Field>
+          <FieldLabel>Memory MiB</FieldLabel>
+          <Input
+            inputMode="numeric"
+            value={mem}
+            onChange={(e) => onMem(e.target.value)}
+            aria-label={`${title} memory MiB`}
+          />
+        </Field>
+        <Field>
+          <FieldLabel>Disk GiB</FieldLabel>
+          <Input
+            inputMode="numeric"
+            value={disk}
+            onChange={(e) => onDisk(e.target.value)}
+            aria-label={`${title} disk GiB`}
+          />
+        </Field>
+      </div>
+    </div>
+  )
+}
+
+function PlanReview({ plan }: { plan: FleetPlan }) {
+  return (
+    <Section
+      title="Placement check"
+      description={`Ports: ClickHouse ${plan.ports.tcp} (native), ${plan.ports.http} (HTTP), ${plan.ports.interserver} (replication); Keeper ${plan.ports.keeper_tcp} and ${plan.ports.keeper_raft}.`}
+    >
+      {plan.errors.length > 0 && (
+        <ul className="flex flex-col gap-1 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">
+          {plan.errors.map((e) => (
+            <li key={e}>✕ {e}</li>
+          ))}
+        </ul>
+      )}
+      {plan.warnings.length > 0 && (
+        <ul className="flex flex-col gap-1 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          {plan.warnings.map((w) => (
+            <li key={w}>⚠ {w}</li>
+          ))}
+        </ul>
+      )}
+      {plan.errors.length === 0 && plan.warnings.length === 0 && (
+        <p className="text-sm text-emerald-700 dark:text-emerald-400">
+          ✓ No problems found.
+        </p>
+      )}
+      {plan.machines.length > 0 && (
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2 font-medium">Machine</th>
+                <th className="px-3 py-2 font-medium">Runs</th>
+                <th className="px-3 py-2 font-medium">CPU reserved</th>
+                <th className="px-3 py-2 font-medium">Memory reserved</th>
+                <th className="px-3 py-2 font-medium">Disk reserved</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plan.machines.map((m) => (
+                <tr key={m.id} className="border-t align-top">
+                  <td className="px-3 py-2">
+                    <div className="font-medium">{m.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {m.zone || "no zone"}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-xs">{m.roles.join(", ")}</td>
+                  <td className="px-3 py-2">
+                    <CapacityBar
+                      usedLabel="reserved"
+                      used={m.cpu}
+                      total={m.cpu_total}
+                      format={formatCores}
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <CapacityBar
+                      usedLabel="reserved"
+                      used={m.mem}
+                      total={m.mem_total}
+                      format={formatBytes}
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <CapacityBar
+                      usedLabel="reserved"
+                      used={m.disk}
+                      total={m.disk_total}
+                      format={formatBytes}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
   )
 }

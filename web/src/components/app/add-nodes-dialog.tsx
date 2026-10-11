@@ -38,8 +38,11 @@ export function AddNodesDialog({
   shardCount,
   isReplica,
   nodes,
+  fleetMachines,
   onSubmit,
 }: {
+  // Docker clusters pick fleet machines instead of typing IPs
+  fleetMachines?: { ip: string; label: string }[]
   open: boolean
   onOpenChange: (open: boolean) => void
   cluster: string
@@ -57,6 +60,7 @@ export function AddNodesDialog({
   const [force, setForce] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
 
   const newShard = Number(shard) === shardCount + 1
   const unreplicated = useQuery({
@@ -67,9 +71,9 @@ export function AddNodesDialog({
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    const { hosts, error: parseError } = expandHosts(
-      String(new FormData(e.currentTarget).get("ips"))
-    )
+    const { hosts, error: parseError } = fleetMachines
+      ? { hosts: [...picked], error: undefined }
+      : expandHosts(String(new FormData(e.currentTarget).get("ips")))
     if (parseError) return setError(parseError)
     if (hosts.length === 0) return setError("Enter at least one IP.")
     const existing = hosts.filter((h) => nodes.some((n) => n.ip === h))
@@ -109,15 +113,52 @@ export function AddNodesDialog({
         </DialogHeader>
         <form onSubmit={submit}>
           <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="add-ips">Server IPs</FieldLabel>
-              <Textarea
-                id="add-ips"
-                name="ips"
-                rows={2}
-                placeholder="10.51.40.15, 10.51.40.16"
-              />
-            </Field>
+            {fleetMachines ? (
+              <Field>
+                <FieldLabel>Machines</FieldLabel>
+                {fleetMachines.length === 0 ? (
+                  <FieldDescription>
+                    No free ready machines. Add one on the Machines page.
+                  </FieldDescription>
+                ) : (
+                  <div className="flex max-h-48 flex-col gap-2 overflow-auto rounded-md border p-3">
+                    {fleetMachines.map((m) => (
+                      <Label
+                        key={m.ip}
+                        className="flex items-center gap-2 font-normal"
+                      >
+                        <Checkbox
+                          checked={picked.has(m.ip)}
+                          onCheckedChange={(v) =>
+                            setPicked((s) => {
+                              const n = new Set(s)
+                              if (v === true) n.add(m.ip)
+                              else n.delete(m.ip)
+                              return n
+                            })
+                          }
+                        />
+                        {m.label}
+                      </Label>
+                    ))}
+                  </div>
+                )}
+                <FieldDescription>
+                  Each machine runs one container of this cluster, with the
+                  cluster&apos;s instance size.
+                </FieldDescription>
+              </Field>
+            ) : (
+              <Field>
+                <FieldLabel htmlFor="add-ips">Server IPs</FieldLabel>
+                <Textarea
+                  id="add-ips"
+                  name="ips"
+                  rows={2}
+                  placeholder="10.51.40.15, 10.51.40.16"
+                />
+              </Field>
+            )}
             <Field>
               <FieldLabel>Add as</FieldLabel>
               <Select
@@ -196,7 +237,9 @@ export function AddNodesDialog({
                 checked={force}
                 onCheckedChange={(v) => setForce(v === true)}
               />
-              Overwrite if ClickHouse already runs on a new server
+              {fleetMachines
+                ? "Allow overcommit (reserve more than a machine has)"
+                : "Overwrite if ClickHouse already runs on a new server"}
             </Label>
             {error && <FieldError>{error}</FieldError>}
           </FieldGroup>

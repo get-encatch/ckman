@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/housepower/ckman/model"
+	"github.com/housepower/ckman/repository"
 )
 
 // Containers ckman manages carry these labels.
@@ -92,13 +93,15 @@ func collect(m model.Machine) model.MachineStats {
 echo "cores $(nproc)"
 echo "load $(cut -d' ' -f1 /proc/loadavg)"
 cpu() { awk '/^cpu /{print $2+$3+$4+$7+$8+$9, $5+$6}' /proc/stat; }
-a=$(cpu); sleep 1; echo "cpu $a $(cpu)"
+a=$(cpu)
 free -b | awk '/^Mem:/{print "mem", $3, $2}'
 df -P -B1 "$D" 2>/dev/null | awk 'NR==2{print "disk", $3, $2}'
 ids=$(docker ps -aq --filter label=%s=1 2>/dev/null)
 for c in $ids; do echo "ctr|$(docker inspect --format '%s' $c)"; done
 run=$(docker ps -q --filter label=%s=1 2>/dev/null)
-[ -n "$run" ] && docker stats --no-stream --format 'st|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}' $run
+# docker stats samples for ~2 s; the CPU sample spans it (or a 1 s sleep)
+if [ -n "$run" ]; then docker stats --no-stream --format 'st|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}' $run; else sleep 1; fi
+echo "cpu $a $(cpu)"
 for c in $ids; do d=$(docker inspect --format '{{index .Config.Labels "%s"}}' $c); [ -d "$d" ] && echo "du|$d|$(timeout 10 du -sb "$d" 2>/dev/null | cut -f1)"; done
 true`, m.DataDir, LabelManaged, inspect, LabelManaged, LabelDir)
 	out, err := Run(m, cmd)
@@ -174,9 +177,13 @@ true`, m.DataDir, LabelManaged, inspect, LabelManaged, LabelDir)
 		}
 	}
 	s.CPUUsed *= float64(s.Cores)
+	limits := diskLimitsFromClusters()
 	for _, name := range order {
 		c := byName[name]
 		c.DiskUsed = du[c.Dir]
+		if l, ok := limits[c.Cluster+"/"+c.Role]; ok {
+			c.DiskLimit = l
+		}
 		s.ReservedCPU += c.CPULimit
 		s.ReservedMem += c.MemLimit
 		s.ReservedDisk += c.DiskLimit
@@ -230,4 +237,22 @@ func cpuBusy(f []string) float64 {
 		return 0
 	}
 	return busy / (busy + idle)
+}
+
+// diskLimitsFromClusters maps "cluster/role" to the soft disk limit set on the
+// cluster, so resizing applies without recreating containers.
+func diskLimitsFromClusters() map[string]uint64 {
+	out := map[string]uint64{}
+	clusters, err := repository.Ps.GetAllClusters()
+	if err != nil {
+		return out
+	}
+	for name, c := range clusters {
+		if c.Docker == nil {
+			continue
+		}
+		out[name+"/clickhouse"] = uint64(c.Docker.DiskGB) << 30
+		out[name+"/keeper"] = uint64(c.Docker.KeeperDiskGB) << 30
+	}
+	return out
 }
