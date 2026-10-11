@@ -196,7 +196,7 @@ func checkDeployParams(conf *model.CKManClickHouseConfig, force bool) error {
 		if !strings.HasSuffix(conf.KeeperConf.Path, "/") {
 			return errors.Errorf("path %s must end with '/'", conf.KeeperConf.Path)
 		}
-		if err := checkAccess(conf.KeeperConf.Path, conf); err != nil {
+		if err := checkKeeperPath(conf); err != nil {
 			return errors.Wrapf(err, "check access error")
 		}
 	} else {
@@ -374,6 +374,30 @@ func GetShardsbyHosts(hosts []string, isReplica bool) []model.CkShard {
 		}
 	}
 	return shards
+}
+
+// checkKeeperPath makes sure the Keeper data folder can be created on the
+// servers that run Keeper (not the ClickHouse servers, for standalone Keeper).
+func checkKeeperPath(conf *model.CKManClickHouseConfig) error {
+	path := conf.KeeperConf.Path
+	for _, host := range conf.KeeperConf.KeeperNodes {
+		sshOpts := common.SshOptions{
+			User:             conf.SshUser,
+			Password:         conf.SshPassword,
+			Port:             conf.SshPort,
+			Host:             host,
+			NeedSudo:         conf.NeedSudo,
+			AuthenticateType: conf.AuthenticateType,
+		}
+		output, err := common.RemoteExecute(sshOpts, fmt.Sprintf("mkdir -p %s && test -w %s && echo 0", path, path))
+		if err != nil {
+			return err
+		}
+		if strings.Trim(output, "\n") != "0" {
+			return errors.Errorf("can't create keeper path %s on %s", path, host)
+		}
+	}
+	return nil
 }
 
 func checkAccess(localPath string, conf *model.CKManClickHouseConfig) error {
