@@ -922,3 +922,59 @@ func TestMergeClickhouseConfig_SecureEnabled_PreservesCustomPorts(t *testing.T) 
 		t.Errorf("expected HttpPort still at its default to switch to %d, got %d", model.ClickHouseDefaultSecureHttpPort, submitted.HttpPort)
 	}
 }
+
+// The settings form sends back "{}" / "[]" for fields stored as nil (Expert,
+// KeeperConf.Expert, Coordination.Expert, UsersConf lists, ZkNodes). A
+// Comment-only save must not count those as changes and restart the cluster
+// and Keeper.
+func TestMergeClickhouseConfig_EmptyVsNilCollections_DoNotTriggerRestart(t *testing.T) {
+	sp := newTestPersistent(t)
+	repository.Ps = sp
+
+	certPEM, keyPEM, err := common.GenSelfSignedCert(nil)
+	if err != nil {
+		t.Fatalf("generate self-signed cert: %v", err)
+	}
+	initial := baseTlsCluster(t, "emptytest", certPEM, keyPEM)
+	initial.Keeper = model.ClickhouseKeeper
+	initial.KeeperConf = &model.KeeperConf{
+		Runtime:     model.KeeperRuntimeStandalone,
+		KeeperNodes: []string{"10.0.0.21", "10.0.0.22", "10.0.0.23"},
+		TcpPort:     9181,
+		RaftPort:    9234,
+		Path:        "/var/lib/keeper/",
+	}
+	initial.Expert = nil
+	if err := sp.CreateCluster(initial); err != nil {
+		t.Fatalf("create cluster: %v", err)
+	}
+
+	stored, err := sp.GetClusterbyName("emptytest")
+	if err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	submitted := stored
+	submitted.Pack()
+	keeper := *stored.KeeperConf
+	keeper.Expert = map[string]string{}
+	keeper.Coordination.Expert = map[string]string{}
+	submitted.KeeperConf = &keeper
+	submitted.Expert = map[string]string{}
+	submitted.ZkNodes = []string{}
+	submitted.UsersConf.Users = []model.User{}
+	submitted.UsersConf.Profiles = []model.Profile{}
+	submitted.UsersConf.Quotas = []model.Quota{}
+	submitted.UsersConf.Roles = []model.Role{}
+	submitted.Comment = "comment only"
+
+	restart, _, kc, lerr := mergeClickhouseConfig(&submitted, false)
+	if lerr != nil {
+		t.Fatalf("mergeClickhouseConfig returned error: %v", lerr)
+	}
+	if restart {
+		t.Errorf("restart=true: empty-vs-nil collections must not trigger a cluster restart")
+	}
+	if kc {
+		t.Errorf("kc=true: an unchanged KeeperConf with empty-vs-nil maps must not be treated as changed")
+	}
+}
