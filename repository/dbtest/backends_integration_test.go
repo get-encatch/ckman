@@ -130,6 +130,7 @@ func runBackend(t *testing.T, bc backendCase) {
 	t.Run("query_history", func(t *testing.T) { testQueryHistory(t, mgr) })
 	t.Run("task_crud", func(t *testing.T) { testTaskCRUD(t, mgr) })
 	t.Run("storage_connection_crud", func(t *testing.T) { testStorageConnectionCRUD(t, mgr) })
+	t.Run("fleet_object_crud", func(t *testing.T) { testFleetObjectCRUD(t, mgr) })
 }
 
 func testStorageConnectionCRUD(t *testing.T, mgr repository.PersistentMgr) {
@@ -479,5 +480,48 @@ func testTaskCRUD(t *testing.T, mgr repository.PersistentMgr) {
 	defer mgr.DeleteTask(id)
 	if _, err := mgr.GetTaskbyTaskId(id); err != nil {
 		t.Fatalf("GetTaskbyTaskId: %v", err)
+	}
+}
+
+func testFleetObjectCRUD(t *testing.T, mgr repository.PersistentMgr) {
+	kind, id := "machine", "dbtest-fleet-1"
+	_ = mgr.DeleteFleetObject(kind, id)
+	if err := mgr.PutFleetObject(kind, id, "m-a", []byte(`{"v":1}`)); err != nil {
+		t.Fatalf("PutFleetObject insert: %v", err)
+	}
+	defer mgr.DeleteFleetObject(kind, id)
+	if err := mgr.PutFleetObject(kind, id, "m-a", []byte(`{"v":2}`)); err != nil {
+		t.Fatalf("PutFleetObject replace: %v", err)
+	}
+	got, err := mgr.GetFleetObject(kind, id)
+	if err != nil || string(got) != `{"v":2}` {
+		t.Fatalf("GetFleetObject = %s, %v; want the replaced body", got, err)
+	}
+	// same id, other kind: separate object
+	if err := mgr.PutFleetObject("standby", id, "s", []byte(`{}`)); err != nil {
+		t.Fatalf("PutFleetObject other kind: %v", err)
+	}
+	defer mgr.DeleteFleetObject("standby", id)
+	list, err := mgr.ListFleetObjects(kind)
+	if err != nil {
+		t.Fatalf("ListFleetObjects: %v", err)
+	}
+	found := 0
+	for _, b := range list {
+		if string(b) == `{"v":2}` {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Fatalf("ListFleetObjects found the object %d times, want 1", found)
+	}
+	if err := mgr.DeleteFleetObject(kind, id); err != nil {
+		t.Fatalf("DeleteFleetObject: %v", err)
+	}
+	if _, err := mgr.GetFleetObject(kind, id); err == nil {
+		t.Fatal("object still there after delete")
+	}
+	if err := mgr.DeleteFleetObject(kind, id); err != repository.ErrRecordNotFound {
+		t.Fatalf("second delete = %v, want ErrRecordNotFound", err)
 	}
 }
