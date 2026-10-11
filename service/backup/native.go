@@ -210,8 +210,13 @@ func (e *Executor) pruneNativeChains(run model.BackupRun, keep int, ns NativeSto
 		log.Logger.Warnf("[exec] retention: list runs of policy %s: %v", run.PolicyID, err)
 		return
 	}
-	for _, r := range runs {
-		if r.RunID != run.RunID && (r.Status == model.BACKUP_STATUS_QUEUED || r.Status == model.BACKUP_STATUS_RUNNING) {
+	for i, r := range runs {
+		if r.RunID == run.RunID {
+			// the ledger still says running: the run is marked done after this returns
+			runs[i].Status = model.BACKUP_STATUS_SUCCESS
+			continue
+		}
+		if r.Status == model.BACKUP_STATUS_QUEUED || r.Status == model.BACKUP_STATUS_RUNNING {
 			log.Logger.Infof("[exec] retention: policy %s has run %s in flight, pruning next time", run.PolicyID, r.RunID)
 			return
 		}

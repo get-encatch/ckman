@@ -183,3 +183,35 @@ func TestScheduler_RegistersFullEntryForNativePolicies(t *testing.T) {
 		t.Fatalf("full=%v incr=%v", full, incr)
 	}
 }
+
+type fakeNativeStorage struct{ deleted []string }
+
+func (f *fakeNativeStorage) NativeBackupSQL(key, baseKey string) string       { return "" }
+func (f *fakeNativeStorage) NativeRestoreSQL(ids []string, key string) string { return "" }
+func (f *fakeNativeStorage) DeleteNativeBackup(hosts []string, prefix string) error {
+	f.deleted = append(f.deleted, prefix)
+	return nil
+}
+
+func TestPruneNativeChains_CountsTheRunThatJustFinished(t *testing.T) {
+	ok := model.BACKUP_STATUS_SUCCESS
+	at := func(h int) time.Time { return time.Date(2026, 10, 1, h, 0, 0, 0, time.UTC) }
+	mk := func(id, base, status string, h int) model.BackupRun {
+		r := nativeRun(id, base, status, 2)
+		r.PolicyID, r.StartedAt = "p", at(h)
+		return r
+	}
+	// f3 just finished: the ledger still has it running
+	cur := mk("f3", "", model.BACKUP_STATUS_RUNNING, 9)
+	runs := []model.BackupRun{cur, mk("i2", "f2", ok, 5), mk("f2", "", ok, 4), mk("f1", "", ok, 1)}
+	var removed []string
+	e := &Executor{
+		policyRuns: func(string) ([]model.BackupRun, error) { return runs, nil },
+		deleteRun:  func(id string) error { removed = append(removed, id); return nil },
+	}
+	ns := &fakeNativeStorage{}
+	e.pruneNativeChains(cur, 2, ns)
+	if len(removed) != 1 || removed[0] != "f1" || len(ns.deleted) != 1 {
+		t.Fatalf("keep=2 with f3 and f2 kept should prune only f1, got runs %v, storage %v", removed, ns.deleted)
+	}
+}
