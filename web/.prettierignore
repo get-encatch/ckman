@@ -5,4 +5,3 @@ pnpm-lock.yaml
 package-lock.json
 pnpm-lock.yaml
 yarn.lock
-src/api/schema.d.ts

@@ -1,12 +1,10 @@
-import createClient, { type Middleware } from "openapi-fetch"
 import md5 from "blueimp-md5"
 
-import type { paths } from "./schema"
-
 const TOKEN_KEY = "ckman.token"
+const USER_KEY = "ckman.user"
 
 // Every ckman response is HTTP 200 with this envelope; retCode "0000" is success.
-export type Envelope<T> = {
+type Envelope<T> = {
   retCode: string
   retMsg: string
   entity: T
@@ -24,53 +22,137 @@ export class CkmanError extends Error {
 // Token expired / invalid / missing (model/code.go).
 const AUTH_CODES = new Set(["5020", "5021", "5022"])
 
-export function getToken() {
+export type Session = {
+  username: string
+  policy: string
+}
+
+function storageGet(key: string) {
   try {
-    return localStorage.getItem(TOKEN_KEY)
+    return localStorage.getItem(key)
   } catch {
     return null
   }
 }
 
-export function setToken(token: string | null) {
+function storageSet(key: string, value: string | null) {
   try {
-    if (token) localStorage.setItem(TOKEN_KEY, token)
-    else localStorage.removeItem(TOKEN_KEY)
+    if (value === null) localStorage.removeItem(key)
+    else localStorage.setItem(key, value)
   } catch {
     // storage unavailable: the session just won't survive a reload
   }
 }
 
-const auth: Middleware = {
-  onRequest({ request }) {
-    const token = getToken()
-    if (token) request.headers.set("token", token)
-    // ckman picks the message language from Accept-Language ("zh" → Chinese)
-    request.headers.set("Accept-Language", "en")
-    return request
-  },
+export function getToken() {
+  return storageGet(TOKEN_KEY)
 }
 
-export const api = createClient<paths>({ baseUrl: "/" })
-api.use(auth)
+export function getSession(): Session | null {
+  const raw = storageGet(USER_KEY)
+  if (!raw || !getToken()) return null
+  try {
+    return JSON.parse(raw) as Session
+  } catch {
+    return null
+  }
+}
 
-// Unwrap the ckman envelope; throws CkmanError on a non-"0000" retCode.
-export async function unwrap<T>(
-  call: Promise<{ data?: unknown; error?: unknown; response: Response }>
+function clearSession() {
+  storageSet(TOKEN_KEY, null)
+  storageSet(USER_KEY, null)
+}
+
+// Called when the backend rejects the token; set by the router setup.
+let onUnauthorized: (() => void) | undefined
+export function setUnauthorizedHandler(handler: () => void) {
+  onUnauthorized = handler
+}
+
+type RequestOptions = {
+  query?: Record<string, string | number | boolean | undefined | null>
+  body?: unknown
+  // multipart upload instead of JSON
+  form?: FormData
+  signal?: AbortSignal
+  // keep integers beyond 2^53 (ClickHouse UInt64/Int64) as strings
+  bigint?: boolean
+}
+
+// JSON.parse reviver that keeps unsafe integers as their exact source text.
+// The `context.source` argument is available in current browsers; without it
+// large integers fall back to (lossy) numbers.
+function bigintReviver(
+  _key: string,
+  value: unknown,
+  context?: { source?: string }
+) {
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    !Number.isSafeInteger(value) &&
+    context?.source
+  ) {
+    return context.source
+  }
+  return value
+}
+
+export async function request<T>(
+  method: "GET" | "POST" | "PUT" | "DELETE",
+  path: string,
+  { query, body, form, signal, bigint }: RequestOptions = {}
 ): Promise<T> {
-  const { data, response } = await call
+  const url = new URL(path, window.location.origin)
+  for (const [key, value] of Object.entries(query ?? {})) {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value))
+    }
+  }
+
+  const headers: Record<string, string> = {
+    // ckman picks the message language from Accept-Language ("zh" → Chinese)
+    "Accept-Language": "en",
+  }
+  const token = getToken()
+  if (token) headers.token = token
+  if (body !== undefined) headers["Content-Type"] = "application/json"
+
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: form ?? (body !== undefined ? JSON.stringify(body) : undefined),
+    signal,
+  })
   if (!response.ok) {
     throw new CkmanError(String(response.status), response.statusText)
   }
-  const body = data as Envelope<T>
-  if (body.retCode !== "0000") {
-    if (AUTH_CODES.has(body.retCode)) setToken(null)
-    throw new CkmanError(body.retCode, body.retMsg)
+  const text = await response.text()
+  const envelope = (
+    bigint ? JSON.parse(text, bigintReviver as never) : JSON.parse(text)
+  ) as Envelope<T>
+  if (envelope.retCode !== "0000") {
+    if (AUTH_CODES.has(envelope.retCode)) {
+      clearSession()
+      onUnauthorized?.()
+    }
+    throw new CkmanError(envelope.retCode, envelope.retMsg)
   }
-  return body.entity
+  return envelope.entity
 }
 
-export type LoginResult = {
+export const api = {
+  get: <T>(path: string, query?: RequestOptions["query"], bigint?: boolean) =>
+    request<T>("GET", path, { query, bigint }),
+  post: <T>(path: string, body?: unknown, query?: RequestOptions["query"]) =>
+    request<T>("POST", path, { body, query }),
+  put: <T>(path: string, body?: unknown, query?: RequestOptions["query"]) =>
+    request<T>("PUT", path, { body, query }),
+  delete: <T>(path: string, query?: RequestOptions["query"], body?: unknown) =>
+    request<T>("DELETE", path, { query, body }),
+}
+
+type LoginResult = {
   username: string
   token: string
   policy: string
@@ -78,18 +160,31 @@ export type LoginResult = {
 }
 
 // ckman stores bcrypt(md5(password)), so the client sends the MD5 hex.
+export function hashPassword(password: string) {
+  return md5(password)
+}
+
 export async function login(username: string, password: string) {
-  const res = await unwrap<LoginResult>(
-    api.POST("/api/login", { body: { username, password: md5(password) } })
+  const res = await api.post<LoginResult>("/api/login", {
+    username,
+    password: hashPassword(password),
+  })
+  storageSet(TOKEN_KEY, res.token)
+  storageSet(
+    USER_KEY,
+    JSON.stringify({ username: res.username, policy: res.policy })
   )
-  setToken(res.token)
   return res
 }
 
 export async function logout() {
   try {
-    await unwrap(api.PUT("/api/logout"))
+    await api.put("/api/logout")
   } finally {
-    setToken(null)
+    clearSession()
   }
+}
+
+export function errorMessage(err: unknown) {
+  return err instanceof Error ? err.message : String(err)
 }
