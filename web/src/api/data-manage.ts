@@ -105,6 +105,24 @@ export type ShardResult = {
   bytes: number
   elapsed: number
   error?: string
+  note?: string // why this replica was read
+}
+
+// backupSettingsQuery: the zone whose replicas a cluster's backups prefer.
+export const backupSettingsQuery = (cluster: string) =>
+  queryOptions({
+    queryKey: ["cluster", cluster, "backup-settings"],
+    queryFn: () =>
+      api.get<{ zone: string }>(
+        `/api/v1/data_manage/backup_settings/${enc(cluster)}`
+      ),
+  })
+
+export function saveBackupSettings(cluster: string, zone: string) {
+  return api.put<{ zone: string }>(
+    `/api/v1/data_manage/backup_settings/${enc(cluster)}`,
+    { zone }
+  )
 }
 
 // MAX_ATTEMPTS mirrors the backend: a backup is tried at most this often.

@@ -392,3 +392,25 @@ func (c *DataManageController) BackupHealth(ctx *gin.Context) {
 	}
 	c.wrapfunc(ctx, model.E_SUCCESS, h)
 }
+
+// GetBackupSettings GET /data_manage/backup_settings/:clusterName
+func (c *DataManageController) GetBackupSettings(ctx *gin.Context) {
+	c.wrapfunc(ctx, model.E_SUCCESS, gin.H{"zone": backup.BackupZone(ctx.Param(ClickHouseClusterPath))})
+}
+
+// SaveBackupSettings PUT /data_manage/backup_settings/:clusterName {"zone": ""}
+// sets the zone whose replicas this cluster's backups prefer to read.
+func (c *DataManageController) SaveBackupSettings(ctx *gin.Context) {
+	var req struct {
+		Zone string `json:"zone"`
+	}
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		c.wrapfunc(ctx, model.E_INVALID_PARAMS, err)
+		return
+	}
+	if err := backup.SetBackupZone(ctx.Param(ClickHouseClusterPath), req.Zone); err != nil {
+		c.wrapfunc(ctx, model.E_DATA_UPDATE_FAILED, err)
+		return
+	}
+	c.wrapfunc(ctx, model.E_SUCCESS, gin.H{"zone": req.Zone})
+}

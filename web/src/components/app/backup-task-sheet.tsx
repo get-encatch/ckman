@@ -558,7 +558,12 @@ function ShardTable({ run }: { run: BackupRun }) {
           {(run.shards ?? []).map((x) => (
             <tr key={x.shard}>
               <td className="px-3 py-1.5 tabular-nums">{x.shard}</td>
-              <td className="px-3 py-1.5 font-mono">{x.host}</td>
+              <td className="px-3 py-1.5">
+                <div className="font-mono">{x.host}</div>
+                {x.note && (
+                  <div className="text-xs text-muted-foreground">{x.note}</div>
+                )}
+              </td>
               <td className="px-3 py-1.5 text-right tabular-nums">
                 {x.bytes ? formatBytes(x.bytes) : "—"}
               </td>

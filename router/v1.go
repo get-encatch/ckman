@@ -183,6 +183,8 @@ func InitRouterV1(groupV1 *gin.RouterGroup, config *config.CKManConfig, signal c
 	groupV1.DELETE("/data_manage/backup/run/:run_id", dataManageController.DeleteRun)
 	groupV1.POST("/data_manage/backup/run/:run_id/retry", dataManageController.RetryRun)
 	groupV1.GET("/data_manage/backup_health", dataManageController.BackupHealth)
+	groupV1.GET(fmt.Sprintf("/data_manage/backup_settings/:%s", controller.ClickHouseClusterPath), dataManageController.GetBackupSettings)
+	groupV1.PUT(fmt.Sprintf("/data_manage/backup_settings/:%s", controller.ClickHouseClusterPath), dataManageController.SaveBackupSettings)
 	groupV1.GET("/data_manage/backup/policy/:policy_id/runs", dataManageController.ListRunsByPolicy)
 	groupV1.GET(fmt.Sprintf("/data_manage/backup/table/:%s/:database/:table/runs", controller.ClickHouseClusterPath), dataManageController.ListRunsByTable)
 	groupV1.POST(fmt.Sprintf("/data_manage/backup/table/:%s/:database/:table/partitions/delete", controller.ClickHouseClusterPath), dataManageController.DeletePartitionRecords)

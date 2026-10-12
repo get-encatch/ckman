@@ -250,6 +250,7 @@ type BackupShardResult struct {
 	Bytes   uint64 `json:"bytes"`   // stored size (0 = unknown)
 	Elapsed int    `json:"elapsed"` // seconds
 	Error   string `json:"error,omitempty"`
+	Note    string `json:"note,omitempty"` // why this replica was read
 }
 
 type BackupRunPartition struct {

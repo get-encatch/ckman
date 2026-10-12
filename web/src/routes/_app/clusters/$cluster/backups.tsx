@@ -20,6 +20,7 @@ import {
 } from "@/api/data-manage"
 import { connectionsQuery } from "@/api/storage"
 import { BackupFormDialog } from "@/components/app/backup-form-dialog"
+import { BackupSource } from "@/components/app/backup-source"
 import { BackupTaskSheet } from "@/components/app/backup-task-sheet"
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
 import { columnHelper, DataTable } from "@/components/app/data-table"
@@ -340,6 +341,7 @@ function BackupsPage() {
         }
       >
         {policies.error && <ErrorState error={policies.error} />}
+        <BackupSource cluster={cluster} canWrite={canWrite} />
         <DataTable
           columns={columns}
           data={tasks}
