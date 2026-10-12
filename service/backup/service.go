@@ -42,6 +42,8 @@ type Service struct {
 	getRunsByTable   func(cluster, db, table string, days int) ([]model.BackupRun, error)
 	getClusterByName func(name string) (model.CKManClickHouseConfig, error)
 	storageFactory   func(policy model.BackupPolicy, cc model.CKManClickHouseConfig) BackupStorage
+	allRuns          func() ([]model.BackupRun, error) // every run, to re-arm retries at start (nil: none)
+	clusterExists    func(name string) bool            // nil: assume it does
 }
 
 func NewService(self string, repo ServiceRepo, pool ServicePool) *Service {
@@ -51,6 +53,11 @@ func NewService(self string, repo ServiceRepo, pool ServicePool) *Service {
 // SubmitForPolicy 给已存在的 policy 生成一次 run；trigger ∈ TRIGGER_*。
 // 即便是 skipped 状态也返回 runID，便于台账定位。
 func (s *Service) SubmitForPolicy(p model.BackupPolicy, trigger string) (string, error) {
+	return s.submit(p, trigger, 1, "")
+}
+
+// submit creates a run; attempt > 1 marks a retry of run retryOf.
+func (s *Service) submit(p model.BackupPolicy, trigger string, attempt int, retryOf string) (string, error) {
 	if p.PolicyID == "" {
 		return "", errors.New("policy id empty")
 	}
@@ -68,6 +75,10 @@ func (s *Service) SubmitForPolicy(p model.BackupPolicy, trigger string) (string,
 		Status:        model.BACKUP_STATUS_QUEUED,
 		StoragePrefix: p.ClusterName, // 新 run 把 cluster 名落到 storage key 前缀；老 run 反序列化为 "" 兼容老路径
 		CreateTime:    now,
+		RetryOf:       retryOf,
+	}
+	if attempt > 1 {
+		run.Attempt = attempt
 	}
 
 	// 1. policy.enabled=false 时仍被 cron 触发（disable→reconcile 之间最多 60s 窗口）
@@ -122,7 +133,10 @@ func (s *Service) Boot() error {
 		r.FinishedAt = now
 		if err := s.repo.UpdateRun(r); err != nil {
 			log.Logger.Errorf("[backup] boot mark interrupted run=%s: %v", r.RunID, err)
+			continue
 		}
+		s.AfterRun(r.RunID) // interrupted backups are retried like failed ones
 	}
+	s.armPendingRetries()
 	return nil
 }

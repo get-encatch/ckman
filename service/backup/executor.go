@@ -75,6 +75,7 @@ type Executor struct {
 	queryRows             func(host string) (queryResult, error)
 	collectChecksumOnHost func(c *shardConn, run *model.BackupRun) error
 	execSQL               func(host, sql string) error                                                   // 新增；Task 21 真实 adapter 注入
+	backupSize            func(host, key string) (uint64, error)                                         // stored size of the native backup at key
 	queryPartitionStats   func(host, db, table, partition string) (rows, bytes, parts uint64, err error) // backup 前统计 partition 数据量
 }
 

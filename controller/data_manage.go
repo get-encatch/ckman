@@ -367,3 +367,28 @@ func (c *DataManageController) GetTablePartitionSummary(ctx *gin.Context) {
 	}
 	c.wrapfunc(ctx, model.E_SUCCESS, infos)
 }
+
+// RetryRun POST /data_manage/backup/run/:run_id/retry retries a failed backup now.
+func (c *DataManageController) RetryRun(ctx *gin.Context) {
+	svc := c.svc(ctx)
+	if svc == nil {
+		return
+	}
+	runID, err := svc.RetryRun(ctx.Param("run_id"))
+	if err != nil {
+		c.wrapfunc(ctx, model.E_DATA_INSERT_FAILED, err)
+		return
+	}
+	c.wrapfunc(ctx, model.E_SUCCESS, gin.H{"run_id": runID})
+}
+
+// BackupHealth GET /data_manage/backup_health?cluster= is the health of every
+// backup (of one cluster, or all).
+func (c *DataManageController) BackupHealth(ctx *gin.Context) {
+	h, err := backup.Health(ctx.Query("cluster"), time.Now())
+	if err != nil {
+		c.wrapfunc(ctx, model.E_DATA_SELECT_FAILED, err)
+		return
+	}
+	c.wrapfunc(ctx, model.E_SUCCESS, h)
+}

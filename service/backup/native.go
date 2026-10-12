@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/housepower/ckman/log"
@@ -112,6 +113,30 @@ func setNativeStatus(run *model.BackupRun, status, msg string, elapsed int) {
 	}
 }
 
+type shardOutcome struct {
+	conn    *shardConn
+	err     error
+	elapsed time.Duration
+}
+
+// runOnShardsTimed runs one statement per shard in parallel and returns each
+// shard's outcome, in shard order.
+func (e *Executor) runOnShardsTimed(sqlFor func(c *shardConn) string) []shardOutcome {
+	out := make([]shardOutcome, len(e.conns))
+	var wg sync.WaitGroup
+	for i, c := range e.conns {
+		wg.Add(1)
+		go func(i int, c *shardConn) {
+			defer wg.Done()
+			start := time.Now()
+			err := e.execSQL(c.host, sqlFor(c))
+			out[i] = shardOutcome{conn: c, err: err, elapsed: time.Since(start)}
+		}(i, c)
+	}
+	wg.Wait()
+	return out
+}
+
 // runOnShards executes one statement per shard connection in parallel and
 // returns the per-host errors.
 func (e *Executor) runOnShards(sqlFor func(c *shardConn) string) []string {
@@ -144,15 +169,29 @@ func (e *Executor) nativeBackup(run model.BackupRun) error {
 		return fmt.Errorf("mark run running: %w", err)
 	}
 	start := time.Now()
-	errs := e.runOnShards(func(c *shardConn) string {
-		key := storage.JoinNativeKey(run.StoragePrefix, run.Database, run.Table, run.RunID, c.shard)
+	keyOf := func(c *shardConn) string {
+		return storage.JoinNativeKey(run.StoragePrefix, run.Database, run.Table, run.RunID, c.shard)
+	}
+	results := e.runOnShardsTimed(func(c *shardConn) string {
 		baseKey := ""
 		if run.BaseRunID != "" {
 			baseKey = storage.JoinNativeKey(run.StoragePrefix, run.Database, run.Table, run.BaseRunID, c.shard)
 		}
-		return fmt.Sprintf("BACKUP TABLE `%s`.`%s`%s", run.Database, run.Table, ns.NativeBackupSQL(key, baseKey))
+		return fmt.Sprintf("BACKUP TABLE `%s`.`%s`%s", run.Database, run.Table, ns.NativeBackupSQL(keyOf(c), baseKey))
 	})
 	elapsed := int(time.Since(start).Seconds())
+	var errs []string
+	run.Shards = nil
+	for _, r := range results {
+		sr := model.BackupShardResult{Shard: r.conn.shard, Host: r.conn.host, Elapsed: int(r.elapsed.Seconds())}
+		if r.err != nil {
+			sr.Error = r.err.Error()
+			errs = append(errs, fmt.Sprintf("[%s] %v", r.conn.host, r.err))
+		} else if e.backupSize != nil {
+			sr.Bytes, _ = e.backupSize(r.conn.host, keyOf(r.conn))
+		}
+		run.Shards = append(run.Shards, sr)
+	}
 	if len(errs) > 0 {
 		msg := strings.Join(errs, "; ")
 		setNativeStatus(&run, model.BACKUP_PARTITION_STATUS_FAILED, msg, elapsed)

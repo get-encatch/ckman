@@ -232,6 +232,24 @@ type BackupRun struct {
 	Elapsed       int                  `json:"elapsed"`
 	ErrorMsg      string               `json:"error_msg"`
 	CreateTime    time.Time            `json:"create_time"`
+
+	// retries of failed backups (service/backup/retry.go)
+	Attempt     int       `json:"attempt,omitempty"`       // 1-based; 0 = 1
+	RetryOf     string    `json:"retry_of,omitempty"`      // the first run of this backup
+	NextRetryAt time.Time `json:"next_retry_at,omitempty"` // failed: when the retry runs
+	RetriedBy   string    `json:"retried_by,omitempty"`    // failed: the run that retried it
+
+	// native backups: what each shard did
+	Shards []BackupShardResult `json:"shards,omitempty"`
+}
+
+// BackupShardResult is one shard's part of a native backup.
+type BackupShardResult struct {
+	Shard   int    `json:"shard"`
+	Host    string `json:"host"`    // the replica the shard was read from
+	Bytes   uint64 `json:"bytes"`   // stored size (0 = unknown)
+	Elapsed int    `json:"elapsed"` // seconds
+	Error   string `json:"error,omitempty"`
 }
 
 type BackupRunPartition struct {

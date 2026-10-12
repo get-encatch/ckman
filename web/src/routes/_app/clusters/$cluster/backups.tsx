@@ -12,6 +12,7 @@ import {
   deletePolicy,
   groupPolicies,
   policyRunsQuery,
+  backupHealthQuery,
   runTime,
   triggerPolicy,
   updatePolicy,
@@ -24,6 +25,11 @@ import { ConfirmDialog } from "@/components/app/confirm-dialog"
 import { columnHelper, DataTable } from "@/components/app/data-table"
 import { ErrorState } from "@/components/app/misc"
 import { PageBody, Section } from "@/components/app/page-header"
+import {
+  HealthBadge,
+  healthHint,
+  worstHealth,
+} from "@/components/app/backup-health"
 import { RestoreDialog } from "@/components/app/restore-dialog"
 import { RunStatusBadge } from "@/components/app/status"
 import { Badge } from "@/components/ui/badge"
@@ -85,6 +91,17 @@ function BackupsPage() {
     () => Object.fromEntries(tasks.map((t, i) => [t.id, latest[i]?.data?.[0]])),
     [tasks, latest]
   )
+  const health = useQuery(backupHealthQuery(cluster))
+  // each backup shows the most urgent state of its tables
+  const healthByTask = useMemo(() => {
+    const byPolicy = new Map((health.data ?? []).map((h) => [h.policy_id, h]))
+    return Object.fromEntries(
+      tasks.map((t) => [
+        t.id,
+        worstHealth(t.policies.flatMap((p) => byPolicy.get(p.policy_id) ?? [])),
+      ])
+    )
+  }, [tasks, health.data])
 
   const refresh = () =>
     queryClient
@@ -175,6 +192,24 @@ function BackupsPage() {
               ? `${connectionNames[p.connection_id] ?? "S3 connection"} · ${p.s3?.Bucket}`
               : `S3 · ${p.s3?.Bucket}`
             : `Local · ${p.local?.path}`
+        },
+      }),
+      col.display({
+        id: "health",
+        header: "Health",
+        cell: (c) => {
+          const h = healthByTask[c.row.original.id]
+          return h ? (
+            <div className="flex min-w-40 flex-col gap-0.5">
+              <HealthBadge state={h.state} />
+              <span
+                className="line-clamp-2 max-w-64 text-xs text-muted-foreground"
+                title={h.error || healthHint(h)}
+              >
+                {healthHint(h)}
+              </span>
+            </div>
+          ) : null
         },
       }),
       col.display({
@@ -269,7 +304,7 @@ function BackupsPage() {
       }),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [latestByTask, canWrite, connectionNames]
+    [latestByTask, healthByTask, canWrite, connectionNames]
   )
 
   const viewingTask = tasks.find((t) => t.id === viewing) ?? null

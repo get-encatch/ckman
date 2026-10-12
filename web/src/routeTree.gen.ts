@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppBackupsRouteImport } from './routes/_app/backups'
 import { Route as AppPackagesRouteImport } from './routes/_app/packages'
 import { Route as AppStorageRouteImport } from './routes/_app/storage'
 import { Route as AppUsersRouteImport } from './routes/_app/users'
@@ -45,6 +46,11 @@ const LoginRoute = LoginRouteImport.update({
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppBackupsRoute = AppBackupsRouteImport.update({
+  id: '/backups',
+  path: '/backups',
   getParentRoute: () => AppRoute,
 } as any)
 const AppPackagesRoute = AppPackagesRouteImport.update({
@@ -157,6 +163,7 @@ const AppClustersClusterTablesRoute =
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
+  '/backups': typeof AppBackupsRoute
   '/packages': typeof AppPackagesRoute
   '/storage': typeof AppStorageRoute
   '/users': typeof AppUsersRoute
@@ -180,6 +187,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/backups': typeof AppBackupsRoute
   '/packages': typeof AppPackagesRoute
   '/storage': typeof AppStorageRoute
   '/users': typeof AppUsersRoute
@@ -205,6 +213,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
+  '/_app/backups': typeof AppBackupsRoute
   '/_app/packages': typeof AppPackagesRoute
   '/_app/storage': typeof AppStorageRoute
   '/_app/users': typeof AppUsersRoute
@@ -232,6 +241,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
+    | '/backups'
     | '/packages'
     | '/storage'
     | '/users'
@@ -255,6 +265,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
+    | '/backups'
     | '/packages'
     | '/storage'
     | '/users'
@@ -279,6 +290,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/login'
+    | '/_app/backups'
     | '/_app/packages'
     | '/_app/storage'
     | '/_app/users'
@@ -328,6 +340,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/backups': {
+      id: '/_app/backups'
+      path: '/backups'
+      fullPath: '/backups'
+      preLoaderRoute: typeof AppBackupsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/packages': {
@@ -501,6 +520,7 @@ const AppClustersClusterRouteWithChildren =
   AppClustersClusterRoute._addFileChildren(AppClustersClusterRouteChildren)
 
 interface AppRouteChildren {
+  AppBackupsRoute: typeof AppBackupsRoute
   AppPackagesRoute: typeof AppPackagesRoute
   AppStorageRoute: typeof AppStorageRoute
   AppUsersRoute: typeof AppUsersRoute
@@ -516,6 +536,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppBackupsRoute: AppBackupsRoute,
   AppPackagesRoute: AppPackagesRoute,
   AppStorageRoute: AppStorageRoute,
   AppUsersRoute: AppUsersRoute,

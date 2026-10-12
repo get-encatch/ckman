@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"github.com/housepower/ckman/service/backup"
 
 	"github.com/housepower/ckman/common"
 	"github.com/housepower/ckman/deploy"
@@ -173,6 +174,7 @@ func CKDestoryHandle(ctx context.Context, task *model.Task) error {
 	if err != nil {
 		return errors.Wrapf(err, "[%s]", model.NodeStatusStore.EN)
 	}
+	backup.PauseClusterBackups(conf.Cluster)
 	// SSH work stays out of the transaction: the logic cluster's other
 	// clusters drop this one from their configs
 	for _, other := range others {

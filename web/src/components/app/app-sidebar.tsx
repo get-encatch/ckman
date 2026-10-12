@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { Link, useNavigate, useRouteContext } from "@tanstack/react-router"
 import {
+  ArchiveIcon,
   ChevronsUpDownIcon,
   DatabaseIcon,
   CpuIcon,
@@ -106,6 +107,9 @@ export function AppSidebar() {
               <NavButton to="/machines" icon={<CpuIcon />} label="Machines" />
             </SidebarMenuItem>
             <SidebarMenuItem>
+              <NavButton to="/backups" icon={<ArchiveIcon />} label="Backups" />
+            </SidebarMenuItem>
+            <SidebarMenuItem>
               <NavButton to="/tasks" icon={<ListChecksIcon />} label="Tasks" />
             </SidebarMenuItem>
             <SidebarMenuItem>
@@ -145,7 +149,14 @@ function NavButton({
   icon,
   label,
 }: {
-  to: "/clusters" | "/machines" | "/tasks" | "/packages" | "/storage" | "/users"
+  to:
+    | "/clusters"
+    | "/machines"
+    | "/backups"
+    | "/tasks"
+    | "/packages"
+    | "/storage"
+    | "/users"
   icon: React.ReactNode
   label: string
 }) {
