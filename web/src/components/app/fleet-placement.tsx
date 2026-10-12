@@ -106,6 +106,58 @@ export function SizeGroup({
   )
 }
 
+// SizeForm is a size being edited (strings, as typed).
+export type SizeForm = { cpu: string; mem: string; disk: string }
+
+export const sizeForm = (z: {
+  cpu: number
+  memory_mb: number
+  disk_gb: number
+}): SizeForm => ({
+  cpu: String(z.cpu),
+  mem: String(z.memory_mb),
+  disk: String(z.disk_gb),
+})
+
+export const fromSizeForm = (f: SizeForm) => ({
+  cpu: Number(f.cpu) || 0,
+  memory_mb: Number(f.mem) || 0,
+  disk_gb: Number(f.disk) || 0,
+})
+
+// SizeInline edits one instance's size in a table row.
+export function SizeInline({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: SizeForm
+  onChange: (v: SizeForm) => void
+}) {
+  const box = (k: keyof SizeForm, unit: string) => (
+    <div className="relative w-24">
+      <Input
+        inputMode="decimal"
+        value={value[k]}
+        onChange={(e) => onChange({ ...value, [k]: e.target.value })}
+        aria-label={`${label} ${unit}`}
+        className="pr-9"
+      />
+      <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-muted-foreground">
+        {unit}
+      </span>
+    </div>
+  )
+  return (
+    <div className="flex flex-wrap gap-2">
+      {box("cpu", "CPU")}
+      {box("mem", "MiB")}
+      {box("disk", "GiB")}
+    </div>
+  )
+}
+
 export function PlanReview({ plan }: { plan: FleetPlan }) {
   return (
     <Section

@@ -151,7 +151,12 @@ export function upgradeCluster(
 
 export function addNodes(
   cluster: string,
-  body: { ips: string[]; shard: number; sourceSchemaHost: string },
+  body: {
+    ips: string[]
+    shard: number
+    sourceSchemaHost: string
+    size?: import("./fleet").Size // fleet clusters: the new servers' size
+  },
   opts: Ssh & { force?: boolean } = {}
 ) {
   return api.post<string>(`/api/v1/ck/node/${enc(cluster)}`, body, opts)
@@ -204,17 +209,6 @@ export const unreplicatedTablesQuery = (cluster: string) =>
   })
 
 // ATTACH TABLE ... AS REPLICATED on every server, no restart.
-export function convertToReplicated(
-  cluster: string,
-  database: string,
-  table: string
-) {
-  return api.post<{ hosts: string[] }>(
-    `/api/v1/ck/table/convert_replicated/${enc(cluster)}`,
-    { database, table }
-  )
-}
-
 export const nodeOverrideQuery = (cluster: string, ip: string) =>
   queryOptions({
     queryKey: ["cluster", cluster, "override", ip],

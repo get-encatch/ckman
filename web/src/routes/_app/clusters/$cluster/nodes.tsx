@@ -24,13 +24,22 @@ import {
 import {
   fleetStatsQuery,
   machinesQuery,
+  keeperSize,
   resizeCluster,
   scaleKeepers,
+  serverSize,
   versionsQuery,
   type DockerConf,
 } from "@/api/fleet"
 import { keeperStatusQuery } from "@/api/observability"
-import { machineLabel, MachineSelect } from "@/components/app/fleet-placement"
+import {
+  fromSizeForm,
+  machineLabel,
+  MachineSelect,
+  SizeInline,
+  sizeForm,
+  type SizeForm,
+} from "@/components/app/fleet-placement"
 import { AddNodesDialog } from "@/components/app/add-nodes-dialog"
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
 import { columnHelper, DataTable } from "@/components/app/data-table"
@@ -56,6 +65,7 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
   Select,
   SelectContent,
@@ -329,7 +339,16 @@ function NodesPage() {
       )}
 
       {canManage && config.data?.docker && (
-        <ResizeSection cluster={cluster} docker={config.data.docker} />
+        <ResizeSection
+          cluster={cluster}
+          docker={config.data.docker}
+          shards={config.data.shards}
+          keepers={
+            config.data.KeeperConf?.runtime === "standalone"
+              ? (config.data.KeeperConf.keeperNodes ?? [])
+              : []
+          }
+        />
       )}
 
       {canManage &&
@@ -340,6 +359,7 @@ function NodesPage() {
             cluster={cluster}
             nodes={config.data.KeeperConf.keeperNodes ?? []}
             ids={config.data.KeeperConf.serverIds ?? []}
+            docker={config.data.docker}
             onTask={(taskId) =>
               void navigate({ to: "/tasks/$taskId", params: { taskId } })
             }
@@ -379,6 +399,16 @@ function NodesPage() {
                     ip: m.ip,
                     label: `${m.name}${m.zone ? ` · ${m.zone}` : ""} (${m.ip})`,
                   }))
+              : undefined
+          }
+          sizeFor={
+            config.data.docker
+              ? (shard) => {
+                  const d = config.data.docker!
+                  // a replica starts like its shard's first server
+                  const peer = config.data.shards[shard - 1]?.replicas[0]?.ip
+                  return peer ? serverSize(d, peer) : serverSize(d, "")
+                }
               : undefined
           }
           onSubmit={async (body, force) => {
@@ -561,41 +591,75 @@ function UpgradeSection({
 }
 
 // Docker clusters: change every container's limits live.
+// ResizeSection changes container limits live: one size for every server
+// and Keeper, or a size per instance.
 function ResizeSection({
   cluster,
   docker,
+  shards,
+  keepers,
 }: {
   cluster: string
   docker: DockerConf
+  shards: { replicas: { ip: string }[] }[]
+  keepers: string[]
 }) {
   const queryClient = useQueryClient()
   const stats = useQuery(fleetStatsQuery())
-  const [form, setForm] = useState(() => toForm(docker))
+  const machines = useQuery(machinesQuery())
+  const servers = shards.flatMap((s, i) =>
+    s.replicas.map((r, j) => ({
+      ip: r.ip,
+      role: `shard ${i + 1} replica ${j + 1}`,
+    }))
+  )
+  const initial = () => ({
+    perInstance:
+      Object.keys(docker.server_sizes ?? {}).length > 0 ||
+      Object.keys(docker.keeper_sizes ?? {}).length > 0,
+    defaults: toForm(docker),
+    servers: Object.fromEntries(
+      servers.map((x) => [x.ip, sizeForm(serverSize(docker, x.ip))])
+    ),
+    keepers: Object.fromEntries(
+      keepers.map((ip) => [ip, sizeForm(keeperSize(docker, ip))])
+    ),
+  })
+  const [form, setForm] = useState(initial)
   const [last, setLast] = useState(docker)
   const [overcommit, setOvercommit] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   if (docker !== last) {
     setLast(docker)
-    setForm(toForm(docker))
+    setForm(initial())
   }
-  const set = (k: keyof typeof form, v: string) =>
-    setForm((f) => ({ ...f, [k]: v }))
-  const changed = JSON.stringify(form) !== JSON.stringify(toForm(docker))
+  const set = (k: keyof typeof form.defaults, v: string) =>
+    setForm((f) => ({ ...f, defaults: { ...f.defaults, [k]: v } }))
+  const changed = JSON.stringify(form) !== JSON.stringify(initial())
+  const nameOf = (ip: string) =>
+    machines.data?.find((m) => m.ip === ip)?.name ?? ip
 
   async function apply() {
     setBusy(true)
     setError(null)
     try {
       const n = (v: string) => Number(v) || 0
+      const sizes = (m: Record<string, SizeForm>) =>
+        Object.fromEntries(
+          Object.entries(m).map(([ip, f]) => [ip, fromSizeForm(f)])
+        )
       await resizeCluster(cluster, {
-        cpu: n(form.cpu),
-        memory_mb: n(form.memory_mb),
-        disk_gb: n(form.disk_gb),
-        keeper_cpu: n(form.keeper_cpu),
-        keeper_memory_mb: n(form.keeper_memory_mb),
-        keeper_disk_gb: n(form.keeper_disk_gb),
+        cpu: n(form.defaults.cpu),
+        memory_mb: n(form.defaults.memory_mb),
+        disk_gb: n(form.defaults.disk_gb),
+        keeper_cpu: n(form.defaults.keeper_cpu),
+        keeper_memory_mb: n(form.defaults.keeper_memory_mb),
+        keeper_disk_gb: n(form.defaults.keeper_disk_gb),
         allow_overcommit: overcommit,
+        // per instance: every container's size; otherwise all use the defaults
+        server_sizes: form.perInstance ? sizes(form.servers) : undefined,
+        keeper_sizes: form.perInstance ? sizes(form.keepers) : undefined,
       })
       toast.success(`Resized ${cluster}`)
       await queryClient.invalidateQueries({ queryKey: ["cluster", cluster] })
@@ -608,16 +672,40 @@ function ResizeSection({
     }
   }
 
-  const input = (k: keyof typeof form, label: string) => (
+  const input = (k: keyof typeof form.defaults, label: string) => (
     <Field className="w-28">
       <FieldLabel>{label}</FieldLabel>
       <Input
         inputMode="decimal"
-        value={form[k]}
+        value={form.defaults[k]}
         onChange={(e) => set(k, e.target.value)}
         aria-label={label}
       />
     </Field>
+  )
+  const row = (
+    kind: "servers" | "keepers",
+    ip: string,
+    role: string,
+    value: SizeForm
+  ) => (
+    <tr key={`${kind}-${ip}`} className="border-t">
+      <td className="px-3 py-2">
+        <div className="font-medium">{nameOf(ip)}</div>
+        <div className="text-xs text-muted-foreground">
+          {ip} · {role}
+        </div>
+      </td>
+      <td className="px-3 py-2">
+        <SizeInline
+          label={`${role} on ${nameOf(ip)}`}
+          value={value}
+          onChange={(v) =>
+            setForm((f) => ({ ...f, [kind]: { ...f[kind], [ip]: v } }))
+          }
+        />
+      </td>
+    </tr>
   )
 
   return (
@@ -626,22 +714,65 @@ function ResizeSection({
       description={`Limits of each container. CPU and memory change live, without a restart; disk is a soft limit. Ports: ${docker.ports.tcp} native, ${docker.ports.http} HTTP, ${docker.ports.interserver} replication, Keeper ${docker.ports.keeper_tcp}.`}
     >
       <div className="flex flex-col gap-4 rounded-lg border p-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <span className="w-full text-sm font-medium sm:w-32 sm:pb-2">
-            ClickHouse
-          </span>
-          {input("cpu", "CPU cores")}
-          {input("memory_mb", "Memory MiB")}
-          {input("disk_gb", "Disk GiB")}
-        </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <span className="w-full text-sm font-medium sm:w-32 sm:pb-2">
-            Keeper
-          </span>
-          {input("keeper_cpu", "Keeper CPU")}
-          {input("keeper_memory_mb", "Keeper MiB")}
-          {input("keeper_disk_gb", "Keeper disk GiB")}
-        </div>
+        <RadioGroup
+          value={form.perInstance ? "each" : "same"}
+          onValueChange={(v) =>
+            setForm((f) => ({ ...f, perInstance: v === "each" }))
+          }
+          className="flex flex-wrap gap-4"
+        >
+          <Label className="flex items-center gap-2 font-normal">
+            <RadioGroupItem value="same" /> Same size for all
+          </Label>
+          <Label className="flex items-center gap-2 font-normal">
+            <RadioGroupItem value="each" /> Size per server
+          </Label>
+        </RadioGroup>
+        {form.perInstance ? (
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Instance</th>
+                  <th className="px-3 py-2 font-medium">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {servers.map((x) =>
+                  row("servers", x.ip, x.role, form.servers[x.ip])
+                )}
+                {keepers.map((ip) =>
+                  row("keepers", ip, "keeper", form.keepers[ip])
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-end gap-3">
+              <span className="w-full text-sm font-medium sm:w-32 sm:pb-2">
+                ClickHouse
+              </span>
+              {input("cpu", "CPU cores")}
+              {input("memory_mb", "Memory MiB")}
+              {input("disk_gb", "Disk GiB")}
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <span className="w-full text-sm font-medium sm:w-32 sm:pb-2">
+                Keeper
+              </span>
+              {input("keeper_cpu", "Keeper CPU")}
+              {input("keeper_memory_mb", "Keeper MiB")}
+              {input("keeper_disk_gb", "Keeper disk GiB")}
+            </div>
+            {initial().perInstance && (
+              <FieldDescription>
+                Applying gives every server and Keeper these sizes, replacing
+                the per-server sizes.
+              </FieldDescription>
+            )}
+          </>
+        )}
         <div className="flex flex-wrap items-center gap-4">
           <Label className="flex items-center gap-2 font-normal">
             <Checkbox
@@ -675,11 +806,13 @@ function KeepersSection({
   cluster,
   nodes,
   ids,
+  docker,
   onTask,
 }: {
   cluster: string
   nodes: string[]
   ids: number[]
+  docker: DockerConf
   onTask: (taskId: string) => void
 }) {
   const machines = useQuery(machinesQuery())
@@ -687,6 +820,8 @@ function KeepersSection({
   const keeper = useQuery(keeperStatusQuery(cluster))
   const [remove, setRemove] = useState<Set<string>>(new Set())
   const [add, setAdd] = useState<string[]>([])
+  const [addSizes, setAddSizes] = useState<SizeForm[]>([])
+  const keeperDefault = sizeForm(keeperSize(docker, ""))
   const [overcommit, setOvercommit] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -720,6 +855,11 @@ function KeepersSection({
         add: adding,
         remove: [...remove],
         allow_overcommit: overcommit,
+        sizes: Object.fromEntries(
+          add.flatMap((id, i) =>
+            id ? [[id, fromSizeForm(addSizes[i] ?? keeperDefault)]] : []
+          )
+        ),
       })
       toast.success("Changing Keepers")
       onTask(res.task_id)
@@ -775,8 +915,8 @@ function KeepersSection({
           })}
         </ul>
         {add.map((id, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div className="w-full max-w-md">
+          <div key={i} className="flex flex-wrap items-center gap-2">
+            <div className="w-full max-w-xs">
               <MachineSelect
                 label={`New Keeper ${i + 1} machine`}
                 items={items}
@@ -787,10 +927,24 @@ function KeepersSection({
                 }
               />
             </div>
+            <SizeInline
+              label={`New Keeper ${i + 1}`}
+              value={addSizes[i] ?? keeperDefault}
+              onChange={(v) =>
+                setAddSizes((z) => {
+                  const next = [...z]
+                  next[i] = v
+                  return next
+                })
+              }
+            />
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setAdd((a) => a.filter((_, j) => j !== i))}
+              onClick={() => {
+                setAdd((a) => a.filter((_, j) => j !== i))
+                setAddSizes((z) => z.filter((_, j) => j !== i))
+              }}
             >
               Cancel
             </Button>

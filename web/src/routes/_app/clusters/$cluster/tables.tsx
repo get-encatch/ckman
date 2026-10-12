@@ -65,8 +65,6 @@ function TablesPage() {
   const { view = "tables" } = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const queryClient = useQueryClient()
-  const { session } = useRouteContext({ from: "/_app" })
-  const canWrite = session.policy !== "guest"
 
   return (
     <PageBody>
@@ -100,7 +98,7 @@ function TablesPage() {
       {view === "merges" && <MergesView cluster={cluster} />}
       {view === "replication" && (
         <>
-          <UnreplicatedSection cluster={cluster} canConvert={canWrite} />
+          <UnreplicatedSection cluster={cluster} />
           <ReplicationView cluster={cluster} />
         </>
       )}

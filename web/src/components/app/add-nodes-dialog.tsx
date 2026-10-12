@@ -2,7 +2,9 @@ import { useState, type FormEvent } from "react"
 import { useQuery } from "@tanstack/react-query"
 
 import { errorMessage } from "@/api/client"
+import type { Size } from "@/api/fleet"
 import { unreplicatedTablesQuery, type NodeInfo } from "@/api/queries"
+import { SizeGroup } from "@/components/app/fleet-placement"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -39,10 +41,12 @@ export function AddNodesDialog({
   isReplica,
   nodes,
   fleetMachines,
+  sizeFor,
   onSubmit,
 }: {
-  // Docker clusters pick fleet machines instead of typing IPs
+  // Docker clusters pick fleet machines instead of typing IPs, and size them
   fleetMachines?: { ip: string; label: string }[]
+  sizeFor?: (shard: number) => Size // the starting size for a shard
   open: boolean
   onOpenChange: (open: boolean) => void
   cluster: string
@@ -50,7 +54,12 @@ export function AddNodesDialog({
   isReplica: boolean
   nodes: NodeInfo[]
   onSubmit: (
-    body: { ips: string[]; shard: number; sourceSchemaHost: string },
+    body: {
+      ips: string[]
+      shard: number
+      sourceSchemaHost: string
+      size?: Size
+    },
     force: boolean
   ) => Promise<void>
 }) {
@@ -61,6 +70,12 @@ export function AddNodesDialog({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [picked, setPicked] = useState<Set<string>>(new Set())
+  const toForm = (z?: Size) => ({
+    cpu: String(z?.cpu ?? ""),
+    mem: String(z?.memory_mb ?? ""),
+    disk: String(z?.disk_gb ?? ""),
+  })
+  const [size, setSize] = useState(() => toForm(sizeFor?.(Number(shard))))
 
   const newShard = Number(shard) === shardCount + 1
   const unreplicated = useQuery({
@@ -89,7 +104,18 @@ export function AddNodesDialog({
     setError(null)
     try {
       await onSubmit(
-        { ips: hosts, shard: Number(shard), sourceSchemaHost: source },
+        {
+          ips: hosts,
+          shard: Number(shard),
+          sourceSchemaHost: source,
+          size: sizeFor
+            ? {
+                cpu: Number(size.cpu) || 0,
+                memory_mb: Number(size.mem) || 0,
+                disk_gb: Number(size.disk) || 0,
+              }
+            : undefined,
+        },
         force
       )
       onOpenChange(false)
@@ -144,8 +170,7 @@ export function AddNodesDialog({
                   </div>
                 )}
                 <FieldDescription>
-                  Each machine runs one container of this cluster, with the
-                  cluster&apos;s instance size.
+                  Each machine runs one container of this cluster.
                 </FieldDescription>
               </Field>
             ) : (
@@ -172,7 +197,10 @@ export function AddNodesDialog({
                   [String(shardCount + 1)]: `A new shard (${shardCount + 1})`,
                 }}
                 value={shard}
-                onValueChange={(v) => setShard(v as string)}
+                onValueChange={(v) => {
+                  setShard(v as string)
+                  if (sizeFor) setSize(toForm(sizeFor(Number(v))))
+                }}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue />
@@ -206,11 +234,21 @@ export function AddNodesDialog({
                       .join(", ")}
                     {notCopied.length > 5 ? ", …" : ""}
                   </span>
-                  . The new replica gets empty copies. Convert them on Tables →
-                  Replication (no restart) and the replica fills itself.
+                  . The new replica gets empty copies of them.
                 </p>
               )}
             </Field>
+            {sizeFor && (
+              <SizeGroup
+                title="Each new server"
+                cpu={size.cpu}
+                mem={size.mem}
+                disk={size.disk}
+                onCpu={(v) => setSize((z) => ({ ...z, cpu: v }))}
+                onMem={(v) => setSize((z) => ({ ...z, mem: v }))}
+                onDisk={(v) => setSize((z) => ({ ...z, disk: v }))}
+              />
+            )}
             <Field>
               <FieldLabel>Copy table definitions from</FieldLabel>
               <Select
