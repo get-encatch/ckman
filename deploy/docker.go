@@ -256,7 +256,7 @@ func (d *CKDeploy) dockerUninstall() error {
 
 // ─── Keeper ──────────────────────────────────────────────────────────────────
 
-func (d *KeeperDeploy) dockerHosts() []string { return d.Conf.KeeperConf.KeeperNodes }
+func (d *KeeperDeploy) dockerHosts() []string { return d.targets() }
 
 func (d *KeeperDeploy) dockerPrepare() error {
 	s := spec(d.Conf, roleKeeper)

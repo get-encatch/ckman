@@ -33,6 +33,7 @@ const (
 	TaskTypeKeeperUpgrade string = "keeper.upgrade"
 	TaskTypeKeeperDestory string = "keeper.destory"
 	TaskTypeKeeperSetting string = "keeper.setting"
+	TaskTypeKeeperScale   string = "keeper.scale"
 
 	ALL_NODES_DEFAULT string = "all_hosts"
 )
@@ -121,6 +122,7 @@ var (
 	TaskOptionSetting    = Internationalization{"设置集群", "Setting"}
 	TaskOptionRebalance  = Internationalization{"均衡集群", "Rebalance"}
 	TaskOptionArchive    = Internationalization{"归档数据", "Archive"}
+	TaskOptionKeepers    = Internationalization{"调整Keeper节点", "Keepers"}
 )
 
 var TaskOptionMap = map[string]Internationalization{
@@ -138,6 +140,7 @@ var TaskOptionMap = map[string]Internationalization{
 	TaskTypeKeeperUpgrade: TaskOptionUpgrade,
 	TaskTypeKeeperDestory: TaskOptionDestory,
 	TaskTypeKeeperSetting: TaskOptionSetting,
+	TaskTypeKeeperScale:   TaskOptionKeepers,
 }
 
 type TaskStatusResp struct {

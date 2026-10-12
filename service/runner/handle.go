@@ -27,6 +27,7 @@ var TaskHandleFunc = map[string]func(ctx context.Context, task *model.Task) erro
 	model.TaskTypeCKSetting:    CKSettingHandle,
 	model.TaskTypeCKArchive:    CKArchiveHandle,
 	model.TaskTypeCKRebalance:  CKRebalanceHandle,
+	model.TaskTypeKeeperScale:  KeeperScaleHandle,
 }
 
 // checkCancel returns ctx.Err() if the task has been cancelled, nil otherwise.

@@ -33,6 +33,17 @@ type KeeperDeploy struct {
 	Conf      *model.CKManClickHouseConfig
 	HostInfos []ckconfig.HostInfo
 	Ext       model.CkDeployExt
+	// Only limits every step to these Keeper nodes (scaling one node at a
+	// time); configs still list all of Conf.KeeperConf.KeeperNodes.
+	Only []string
+}
+
+// targets are the Keeper nodes the steps act on.
+func (d *KeeperDeploy) targets() []string {
+	if len(d.Only) > 0 {
+		return d.Only
+	}
+	return d.Conf.KeeperConf.KeeperNodes
 }
 
 func NewKeeperDeploy(conf model.CKManClickHouseConfig, packages Packages) *KeeperDeploy {
@@ -50,7 +61,7 @@ func (d *KeeperDeploy) Init() error {
 	var lastError error
 	var wg sync.WaitGroup
 	d.Ext.Ipv6Enable = true
-	for _, host := range d.Conf.KeeperConf.KeeperNodes {
+	for _, host := range d.targets() {
 		innerHost := host
 		wg.Add(1)
 		_ = common.Pool.Submit(func() {
@@ -106,7 +117,7 @@ func (d *KeeperDeploy) Prepare() error {
 
 	var lastError error
 	var wg sync.WaitGroup
-	for _, host := range d.Conf.KeeperConf.KeeperNodes {
+	for _, host := range d.targets() {
 		innerHost := host
 		wg.Add(1)
 		_ = common.Pool.Submit(func() {
@@ -150,7 +161,7 @@ func (d *KeeperDeploy) Install() error {
 	}
 	var lastError error
 	var wg sync.WaitGroup
-	for _, host := range d.Conf.KeeperConf.KeeperNodes {
+	for _, host := range d.targets() {
 		innerHost := host
 		wg.Add(1)
 		_ = common.Pool.Submit(func() {
@@ -211,7 +222,7 @@ func (d *KeeperDeploy) Uninstall() error {
 	}
 	var lastError error
 	var wg sync.WaitGroup
-	for _, host := range d.Conf.KeeperConf.KeeperNodes {
+	for _, host := range d.targets() {
 		innerHost := host
 		wg.Add(1)
 		_ = common.Pool.Submit(func() {
@@ -250,7 +261,7 @@ func (d *KeeperDeploy) Upgrade() error {
 	cmd := cmdIns.UpgradeCmd(KeeperSvrName, d.Packages)
 	var lastError error
 	var wg sync.WaitGroup
-	for _, host := range d.Conf.KeeperConf.KeeperNodes {
+	for _, host := range d.targets() {
 		innerHost := host
 		wg.Add(1)
 		_ = common.Pool.Submit(func() {
@@ -296,8 +307,8 @@ func (d *KeeperDeploy) Config() error {
 	}
 	var lastError error
 	var wg sync.WaitGroup
-	for index, host := range d.Conf.KeeperConf.KeeperNodes {
-		innerIndex := index
+	for _, host := range d.targets() {
+		innerIndex := indexOf(d.Conf.KeeperConf.KeeperNodes, host)
 		innerHost := host
 		confFiles := confFiles
 		wg.Add(1)
@@ -332,7 +343,7 @@ func (d *KeeperDeploy) Config() error {
 				return
 			}
 			defer os.Remove(keeperFile.FullName)
-			keeperXml, err := ckconfig.GenerateKeeperXML(keeperFile.FullName, d.Conf, d.Ext.Ipv6Enable, innerIndex+1)
+			keeperXml, err := ckconfig.GenerateKeeperXML(keeperFile.FullName, d.Conf, d.Ext.Ipv6Enable, d.Conf.KeeperConf.ServerID(innerIndex))
 			if err != nil {
 				lastError = err
 				return
@@ -375,7 +386,7 @@ func (d *KeeperDeploy) Start() error {
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	var lastError error
 	var wg sync.WaitGroup
-	for _, host := range d.Conf.KeeperConf.KeeperNodes {
+	for _, host := range d.targets() {
 		innerHost := host
 		wg.Add(1)
 		_ = common.Pool.Submit(func() {
@@ -429,7 +440,7 @@ func (d *KeeperDeploy) Stop() error {
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	var lastError error
 	var wg sync.WaitGroup
-	for _, host := range d.Conf.KeeperConf.KeeperNodes {
+	for _, host := range d.targets() {
 		innerHost := host
 		wg.Add(1)
 		_ = common.Pool.Submit(func() {
@@ -467,7 +478,7 @@ func (d *KeeperDeploy) Restart() error {
 	cmdIns := GetSuitableCmdAdpt(d.Conf.PkgType)
 	var lastError error
 	var wg sync.WaitGroup
-	for _, host := range d.Conf.KeeperConf.KeeperNodes {
+	for _, host := range d.targets() {
 		innerHost := host
 		wg.Add(1)
 		_ = common.Pool.Submit(func() {
@@ -501,7 +512,7 @@ func (d *KeeperDeploy) Check(timeout int) error {
 	d.Conf.Normalize()
 	var lastError error
 	var wg sync.WaitGroup
-	for _, host := range d.Conf.KeeperConf.KeeperNodes {
+	for _, host := range d.targets() {
 		innerHost := host
 		wg.Add(1)
 		_ = common.Pool.Submit(func() {
@@ -533,4 +544,13 @@ func (d *KeeperDeploy) Check(timeout int) error {
 	}
 	log.Logger.Infof("check done")
 	return nil
+}
+
+func indexOf(items []string, s string) int {
+	for i, x := range items {
+		if x == s {
+			return i
+		}
+	}
+	return -1
 }

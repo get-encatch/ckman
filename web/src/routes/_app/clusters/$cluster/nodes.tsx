@@ -25,9 +25,12 @@ import {
   fleetStatsQuery,
   machinesQuery,
   resizeCluster,
+  scaleKeepers,
   versionsQuery,
   type DockerConf,
 } from "@/api/fleet"
+import { keeperStatusQuery } from "@/api/observability"
+import { machineLabel, MachineSelect } from "@/components/app/fleet-placement"
 import { AddNodesDialog } from "@/components/app/add-nodes-dialog"
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
 import { columnHelper, DataTable } from "@/components/app/data-table"
@@ -35,7 +38,7 @@ import { NodeLogSheet } from "@/components/app/node-log-sheet"
 import { NodeOverrideSheet } from "@/components/app/node-override-sheet"
 import { PageBody, Section } from "@/components/app/page-header"
 import { useSshGate } from "@/components/app/ssh-gate"
-import { NodeStatus, UsageBar } from "@/components/app/status"
+import { NodeStatus, StatusPill, UsageBar } from "@/components/app/status"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -328,6 +331,20 @@ function NodesPage() {
       {canManage && config.data?.docker && (
         <ResizeSection cluster={cluster} docker={config.data.docker} />
       )}
+
+      {canManage &&
+        config.data?.docker &&
+        config.data.keeper === "clickhouse-keeper" &&
+        config.data.KeeperConf?.runtime === "standalone" && (
+          <KeepersSection
+            cluster={cluster}
+            nodes={config.data.KeeperConf.keeperNodes ?? []}
+            ids={config.data.KeeperConf.serverIds ?? []}
+            onTask={(taskId) =>
+              void navigate({ to: "/tasks/$taskId", params: { taskId } })
+            }
+          />
+        )}
 
       {ssh.dialog}
       <NodeLogSheet
@@ -647,3 +664,167 @@ const toForm = (d: DockerConf) => ({
   keeper_memory_mb: String(d.keeper_memory_mb),
   keeper_disk_gb: String(d.keeper_disk_gb),
 })
+
+// KeepersSection adds Keepers on machines the user picks and removes others.
+// ckman changes one Keeper at a time and waits for it to join or leave.
+function KeepersSection({
+  cluster,
+  nodes,
+  ids,
+  onTask,
+}: {
+  cluster: string
+  nodes: string[]
+  ids: number[]
+  onTask: (taskId: string) => void
+}) {
+  const machines = useQuery(machinesQuery())
+  const stats = useQuery(fleetStatsQuery())
+  const keeper = useQuery(keeperStatusQuery(cluster))
+  const [remove, setRemove] = useState<Set<string>>(new Set())
+  const [add, setAdd] = useState<string[]>([])
+  const [overcommit, setOvercommit] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const byIP = new Map((machines.data ?? []).map((m) => [m.ip, m]))
+  const statsById = new Map((stats.data ?? []).map((s) => [s.machine_id, s]))
+  const roleOf = new Map((keeper.data ?? []).map((k) => [k.host, k]))
+  const candidates = (machines.data ?? []).filter(
+    (m) => m.status === "ready" && !nodes.includes(m.ip)
+  )
+  const items = Object.fromEntries(
+    candidates.map((m) => [m.id, machineLabel(m, statsById.get(m.id))])
+  )
+  const adding = add.filter(Boolean)
+  const total = nodes.length - remove.size + adding.length
+  const changed = remove.size > 0 || adding.length > 0
+  const problem =
+    total < 1
+      ? "A cluster needs at least one Keeper."
+      : total % 2 === 0
+        ? `That leaves ${total} Keepers: use an odd number (1, 3 or 5) so a majority survives a failure.`
+        : new Set(adding).size !== adding.length
+          ? "A machine is chosen twice."
+          : null
+
+  async function apply() {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await scaleKeepers(cluster, {
+        add: adding,
+        remove: [...remove],
+        allow_overcommit: overcommit,
+      })
+      toast.success("Changing Keepers")
+      onTask(res.task_id)
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Section
+      title="Keepers"
+      description="Coordination nodes for replication and ON CLUSTER changes. Run 3 (or 5) on different machines so the cluster keeps taking writes if one fails. ckman adds and removes one Keeper at a time and waits for each to join or leave."
+    >
+      <div className="flex flex-col gap-4 rounded-lg border p-4">
+        <ul className="flex flex-col divide-y">
+          {nodes.map((ip, i) => {
+            const m = byIP.get(ip)
+            const k = roleOf.get(ip)
+            return (
+              <li key={ip} className="flex flex-wrap items-center gap-3 py-2">
+                <span className="font-mono text-sm">{ip}</span>
+                <span className="text-xs text-muted-foreground">
+                  {m ? `${m.name}${m.zone ? ` · ${m.zone}` : ""}` : ""} · server{" "}
+                  {ids[i] ?? i + 1}
+                </span>
+                {k &&
+                  (k.peer_state === "offline" ? (
+                    <StatusPill tone="bad" label="Offline" />
+                  ) : (
+                    <StatusPill
+                      tone={k.server_state === "leader" ? "ok" : "info"}
+                      label={k.server_state}
+                    />
+                  ))}
+                <Label className="ml-auto flex items-center gap-2 font-normal">
+                  <Checkbox
+                    checked={remove.has(ip)}
+                    onCheckedChange={(v) =>
+                      setRemove((s) => {
+                        const n = new Set(s)
+                        if (v === true) n.add(ip)
+                        else n.delete(ip)
+                        return n
+                      })
+                    }
+                  />
+                  Remove
+                </Label>
+              </li>
+            )
+          })}
+        </ul>
+        {add.map((id, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className="w-full max-w-md">
+              <MachineSelect
+                label={`New Keeper ${i + 1} machine`}
+                items={items}
+                candidates={candidates}
+                value={id}
+                onChange={(v) =>
+                  setAdd((a) => a.map((x, j) => (j === i ? v : x)))
+                }
+              />
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setAdd((a) => a.filter((_, j) => j !== i))}
+            >
+              Cancel
+            </Button>
+          </div>
+        ))}
+        <div>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={candidates.length === 0}
+            onClick={() => setAdd((a) => [...a, ""])}
+          >
+            <PlusIcon /> Add a Keeper
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-4">
+          <span className="text-sm">
+            {changed
+              ? `${nodes.length} → ${total} Keepers`
+              : `${nodes.length} Keeper${nodes.length === 1 ? "" : "s"}`}
+          </span>
+          <Label className="flex items-center gap-2 font-normal">
+            <Checkbox
+              checked={overcommit}
+              onCheckedChange={(v) => setOvercommit(v === true)}
+            />
+            Allow overcommit
+          </Label>
+          <Button
+            disabled={!changed || !!problem || busy || add.some((x) => !x)}
+            onClick={() => void apply()}
+          >
+            {busy ? "Checking…" : "Apply"}
+          </Button>
+        </div>
+        {changed && problem && <FieldDescription>{problem}</FieldDescription>}
+        {error && <FieldError>{error}</FieldError>}
+      </div>
+    </Section>
+  )
+}

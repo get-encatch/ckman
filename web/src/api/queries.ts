@@ -28,6 +28,7 @@ export type Cluster = {
   KeeperConf: {
     runtime: "standalone" | "internal"
     keeperNodes: string[] | null
+    serverIds?: number[] | null
     tcpPort: number
     raftPort: number
     Path: string

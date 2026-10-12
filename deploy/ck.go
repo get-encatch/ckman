@@ -467,7 +467,7 @@ func (d *CKDeploy) Config() error {
 						break
 					}
 				}
-				keeperXml, err := ckconfig.GenerateKeeperXML(keeperFile.FullName, d.Conf, d.Ext.Ipv6Enable, idx+1)
+				keeperXml, err := ckconfig.GenerateKeeperXML(keeperFile.FullName, d.Conf, d.Ext.Ipv6Enable, d.Conf.KeeperConf.ServerID(idx))
 				if err != nil {
 					lastError = err
 					return

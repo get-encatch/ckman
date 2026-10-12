@@ -157,6 +157,27 @@ type KeeperConf struct {
 	Path         string
 	Coordination Coordination
 	Expert       map[string]string
+	// ServerIDs are the Raft server IDs of KeeperNodes, in the same order.
+	// Empty (clusters deployed before Keeper scaling) means position + 1.
+	ServerIDs []int `json:"serverIds,omitempty"`
+}
+
+// ServerID is the Raft server ID of KeeperNodes[i]. IDs never change while a
+// node is a member, so removing one Keeper doesn't renumber the others.
+func (k *KeeperConf) ServerID(i int) int {
+	if i < len(k.ServerIDs) && k.ServerIDs[i] > 0 {
+		return k.ServerIDs[i]
+	}
+	return i + 1
+}
+
+// FillServerIDs makes ServerIDs explicit for the current KeeperNodes.
+func (k *KeeperConf) FillServerIDs() {
+	ids := make([]int, len(k.KeeperNodes))
+	for i := range k.KeeperNodes {
+		ids[i] = k.ServerID(i)
+	}
+	k.ServerIDs = ids
 }
 
 // Refers to https://clickhouse.tech/docs/en/engines/table-engines/mergetree-family/mergetree/#table_engine-mergetree-multiple-volumes

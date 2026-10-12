@@ -232,6 +232,18 @@ export function createFleetCluster(body: FleetClusterRequest) {
   )
 }
 
+// scaleKeepers adds Keepers on the given machines and removes the given
+// Keeper IPs; an odd number must remain. Returns the task.
+export function scaleKeepers(
+  cluster: string,
+  body: { add: string[]; remove: string[]; allow_overcommit: boolean }
+) {
+  return api.post<{ task_id: string }>(
+    `/api/v1/fleet/cluster/${enc(cluster)}/keepers`,
+    body
+  )
+}
+
 export function resizeCluster(
   cluster: string,
   body: Resources & { allow_overcommit: boolean }
