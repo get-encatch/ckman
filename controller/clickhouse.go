@@ -110,42 +110,31 @@ func (controller *ClickHouseController) ImportCluster(c *gin.Context) {
 		return
 	}
 
-	if err = repository.Ps.Begin(); err != nil {
-		controller.wrapfunc(c, model.E_TRANSACTION_DEGIN_FAILED, err)
-		return
-	}
-	if err = repository.Ps.CreateCluster(conf); err != nil {
-		controller.wrapfunc(c, model.E_DATA_INSERT_FAILED, err)
-		_ = repository.Ps.Rollback()
-		return
-	}
-
-	//logic cluster
-	if req.LogicCluster != "" {
-		physics, err := repository.Ps.GetLogicClusterbyName(req.LogicCluster)
-		if err != nil {
-			if errors.Is(err, repository.ErrRecordNotFound) {
-				physics = []string{req.Cluster}
-				if err1 := repository.Ps.CreateLogicCluster(req.LogicCluster, physics); err1 != nil {
-					controller.wrapfunc(c, model.E_DATA_INSERT_FAILED, err1)
-					_ = repository.Ps.Rollback()
-					return
-				}
-			} else {
-				controller.wrapfunc(c, model.E_DATA_SELECT_FAILED, err)
-				_ = repository.Ps.Rollback()
-				return
-			}
-		} else {
-			physics = append(physics, req.Cluster)
-			if err2 := repository.Ps.UpdateLogicCluster(req.LogicCluster, physics); err2 != nil {
-				controller.wrapfunc(c, model.E_DATA_UPDATE_FAILED, err2)
-				_ = repository.Ps.Rollback()
-				return
-			}
+	code = model.E_TRANSACTION_DEGIN_FAILED
+	err = repository.Ps.InTx(func(tx repository.PersistentMgr) error {
+		if err := tx.CreateCluster(conf); err != nil {
+			code = model.E_DATA_INSERT_FAILED
+			return err
 		}
+		if req.LogicCluster == "" {
+			return nil
+		}
+		physics, err := tx.GetLogicClusterbyName(req.LogicCluster)
+		if err != nil {
+			if !errors.Is(err, repository.ErrRecordNotFound) {
+				code = model.E_DATA_SELECT_FAILED
+				return err
+			}
+			code = model.E_DATA_INSERT_FAILED
+			return tx.CreateLogicCluster(req.LogicCluster, []string{req.Cluster})
+		}
+		code = model.E_DATA_UPDATE_FAILED
+		return tx.UpdateLogicCluster(req.LogicCluster, append(physics, req.Cluster))
+	})
+	if err != nil {
+		controller.wrapfunc(c, code, err)
+		return
 	}
-	_ = repository.Ps.Commit()
 
 	controller.wrapfunc(c, model.E_SUCCESS, nil)
 }
@@ -172,24 +161,20 @@ func (controller *ClickHouseController) DeleteCluster(c *gin.Context) {
 
 	common.CloseConns(conf.Hosts)
 
-	if err = repository.Ps.Begin(); err != nil {
-		controller.wrapfunc(c, model.E_TRANSACTION_DEGIN_FAILED, err)
-		return
-	}
-	if err = repository.Ps.DeleteCluster(clusterName); err != nil {
-		controller.wrapfunc(c, model.E_DATA_DELETE_FAILED, err)
-		_ = repository.Ps.Rollback()
-		return
-	}
-
-	if conf.LogicCluster != nil {
-		if err = deploy.ClearLogicCluster(conf.Cluster, *conf.LogicCluster, false); err != nil {
-			controller.wrapfunc(c, model.E_CONFIG_FAILED, err)
-			_ = repository.Ps.Rollback()
-			return
+	err = repository.Ps.InTx(func(tx repository.PersistentMgr) error {
+		if err := tx.DeleteCluster(clusterName); err != nil {
+			return err
 		}
+		if conf.LogicCluster != nil {
+			_, err := deploy.RemoveFromLogicCluster(tx, conf.Cluster, *conf.LogicCluster)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		controller.wrapfunc(c, model.E_DATA_DELETE_FAILED, err)
+		return
 	}
-	_ = repository.Ps.Commit()
 
 	controller.wrapfunc(c, model.E_SUCCESS, nil)
 }
@@ -1522,7 +1507,7 @@ func (controller *ClickHouseController) DestroyCluster(c *gin.Context) {
 	}
 
 	d := deploy.NewCkDeploy(conf)
-	d.Packages = deploy.BuildPackages(conf.Version, conf.PkgType, conf.Cwd)
+	d.Packages = deploy.RemovalPackages(conf.Version, conf.PkgType, conf.Cwd)
 	taskId, err := deploy.CreateNewTask(clusterName, model.TaskTypeCKDestory, d)
 	if err != nil {
 		controller.wrapfunc(c, model.E_DATA_INSERT_FAILED, err)
@@ -1848,7 +1833,18 @@ func (controller *ClickHouseController) AddNode(c *gin.Context) {
 	d.Ext.SourceSchemaHost = req.SourceSchemaHost
 
 	if conf.IsDocker() {
-		if err := fleetdeploy.CheckNewNodes(&conf, req.Ips, force); err != nil {
+		if req.Size != nil && conf.Docker != nil {
+			docker := *conf.Docker
+			docker.ServerSizes = map[string]model.Size{}
+			for k, v := range conf.Docker.ServerSizes {
+				docker.ServerSizes[k] = v
+			}
+			for _, ip := range req.Ips {
+				docker.SetServerSize(ip, *req.Size)
+			}
+			d.Conf.Docker = &docker
+		}
+		if err := fleetdeploy.CheckNewNodes(d.Conf, req.Ips, force); err != nil {
 			controller.wrapfunc(c, model.E_DATA_CHECK_FAILED, err)
 			return
 		}
@@ -1961,7 +1957,7 @@ SETTINGS skip_unavailable_shards = 1`
 	}
 
 	d := deploy.NewCkDeploy(conf)
-	d.Packages = deploy.BuildPackages(conf.Version, conf.PkgType, conf.Cwd)
+	d.Packages = deploy.RemovalPackages(conf.Version, conf.PkgType, conf.Cwd)
 	d.Conf.Hosts = []string{ip}
 
 	taskId, err := deploy.CreateNewTask(clusterName, model.TaskTypeCKDeleteNode, d)

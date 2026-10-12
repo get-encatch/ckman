@@ -24,9 +24,11 @@ type PersistentFactory interface {
 type PersistentBase interface {
 	UnmarshalConfig(configMap map[string]interface{}) interface{}
 	Init(config interface{}) error
-	Begin() error
-	Commit() error
-	Rollback() error
+	// InTx runs fn in a transaction of its own. fn gets a copy of the
+	// persistence bound to that transaction; the shared connection is never
+	// swapped, so concurrent callers neither see nor end the transaction.
+	// Keep fn to database work: SQLite has one writer at a time.
+	InTx(fn func(tx PersistentMgr) error) error
 }
 
 type PersistentClusterService interface {
@@ -36,6 +38,21 @@ type PersistentClusterService interface {
 	CreateCluster(cluster model.CKManClickHouseConfig) error
 	UpdateCluster(cluster model.CKManClickHouseConfig) error
 	DeleteCluster(clusterName string) error
+}
+
+// ClusterStatusDraft marks a create-cluster form saved as a draft in the
+// clusters table. Cluster queries never return drafts.
+const ClusterStatusDraft = "draft"
+
+// PersistentDraftService keeps create-cluster drafts. A draft's name reserves
+// the cluster name; creating the cluster replaces the draft.
+type PersistentDraftService interface {
+	// SaveClusterDraft creates or replaces draft name; with oldName it renames
+	// that draft. ErrRecordExists when a cluster or another draft has name.
+	SaveClusterDraft(name, oldName string, body []byte) error
+	GetClusterDraft(name string) ([]byte, error)
+	ListClusterDrafts() ([][]byte, error)
+	DeleteClusterDraft(name string) error
 }
 
 type PersistentLogicService interface {
@@ -134,13 +151,14 @@ type PersistentUserService interface {
 type PersistentMgr interface {
 	PersistentBase
 	PersistentClusterService
+	PersistentDraftService
 	PersistentLogicService
 	PersistentQueryHistoryService
 	PersistentTaskService
-	PersistentBackupService           // 老接口保留
-	PersistentBackupPolicyService     // 新增
-	PersistentBackupRunService        // 新增
-	PersistentUserService             // 新增 — Phase 1 用户管理
+	PersistentBackupService       // 老接口保留
+	PersistentBackupPolicyService // 新增
+	PersistentBackupRunService    // 新增
+	PersistentUserService         // 新增 — Phase 1 用户管理
 	PersistentStorageConnectionService
 	PersistentFleetService
 }

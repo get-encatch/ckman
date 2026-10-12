@@ -367,15 +367,24 @@ func (d *CKDeploy) Config() error {
 	d.Conf.Normalize()
 	confFiles := make([]string, 0)
 
+	// metrika.xml and custom.xml keep their names on the servers, so each
+	// push generates them in a folder of its own: a shared path let two
+	// clusters configured at once upload each other's files
+	confDir, err := os.MkdirTemp(path.Join(config.GetWorkDirectory(), "package"), "conf-")
+	if err != nil {
+		return errors.Wrap(err, "config folder")
+	}
+	defer os.RemoveAll(confDir)
+
 	if d.Conf.LogicCluster == nil {
-		metrika, err := ckconfig.GenerateMetrikaXML(path.Join(config.GetWorkDirectory(), "package", "metrika.xml"), d.Conf)
+		metrika, err := ckconfig.GenerateMetrikaXML(path.Join(confDir, "metrika.xml"), d.Conf)
 		if err != nil {
 			return err
 		}
 		confFiles = append(confFiles, metrika)
 	}
 
-	custom, err := ckconfig.GenerateCustomXML(path.Join(config.GetWorkDirectory(), "package", "custom.xml"), d.Conf, d.Ext)
+	custom, err := ckconfig.GenerateCustomXML(path.Join(confDir, "custom.xml"), d.Conf, d.Ext)
 	if err != nil {
 		return err
 	}
@@ -655,6 +664,9 @@ func (d *CKDeploy) Start() error {
 				lastError = err
 				return
 			}
+			if strings.HasSuffix(d.Conf.PkgType, common.PkgSuffixTgz) {
+				setAutostart(sshOpts, d.Conf.Cwd, CkSvrName, cmd)
+			}
 			log.Logger.Debugf("host %s start done", innerHost)
 		})
 	}
@@ -686,6 +698,9 @@ func (d *CKDeploy) Stop() error {
 				Host:             innerHost,
 				NeedSudo:         d.Conf.NeedSudo,
 				AuthenticateType: d.Conf.AuthenticateType,
+			}
+			if strings.HasSuffix(d.Conf.PkgType, common.PkgSuffixTgz) {
+				setAutostart(sshOpts, d.Conf.Cwd, CkSvrName, "")
 			}
 			cmd := cmdIns.StopCmd(CkSvrName, d.Conf.Cwd, path.Join(d.Conf.Path, "clickhouse"))
 			_, err := common.RemoteExecute(sshOpts, cmd)
@@ -761,6 +776,7 @@ func (d *CKDeploy) Check(timeout int) error {
 			ticker2 := time.NewTicker(time.Duration(timeout) * time.Second)
 			defer ticker.Stop()
 			defer ticker2.Stop()
+			wrongCluster := ""
 			for {
 				select {
 				case <-ticker.C:
@@ -773,9 +789,21 @@ func (d *CKDeploy) Check(timeout int) error {
 						log.Logger.Errorf("ping error: %v", err)
 						continue
 					}
+					// the server on this port must be this cluster's (servers
+					// without the macro, e.g. imported, can't tell and pass)
+					var macro string
+					if conn.QueryRow("SELECT getMacro('cluster')").Scan(&macro) == nil && macro != "" && macro != d.Conf.Cluster {
+						wrongCluster = fmt.Sprintf("%s:%d answers as cluster %s", innerHost, d.Conf.Port, macro)
+						log.Logger.Errorf("%s, not %s", wrongCluster, d.Conf.Cluster)
+						continue
+					}
 					log.Logger.Debugf("host %s check done", innerHost)
 					return
 				case <-ticker2.C:
+					if wrongCluster != "" {
+						lastError = errors.Errorf("%s: another cluster holds the port", wrongCluster)
+						return
+					}
 					lastError = errors.Wrapf(model.CheckTimeOutErr, "clickhouse-server may start failed, please check the clickhouse-server log")
 					return
 				}
@@ -922,35 +950,33 @@ func GenLogicMetrika(d *CKDeploy) (string, []*CKDeploy) {
 	return ckconfig.GenLogicMetrika(*d.Conf.LogicCluster, clusters, secret), deploys
 }
 
-func ClearLogicCluster(cluster, logic string, reconf bool) error {
+// RemoveFromLogicCluster takes cluster out of logic cluster logic in ps (a
+// transaction or repository.Ps) and returns the clusters left in it, whose
+// configs then need ConfigLogicOtherCluster.
+func RemoveFromLogicCluster(ps repository.PersistentMgr, cluster, logic string) ([]string, error) {
 	var newPhysics []string
-	physics, err := repository.Ps.GetLogicClusterbyName(logic)
-	if err == nil {
-		// need delete logic cluster and reconf other cluster
+	if physics, err := ps.GetLogicClusterbyName(logic); err == nil {
 		for _, physic := range physics {
-			if physic == cluster {
-				continue
+			if physic != cluster {
+				newPhysics = append(newPhysics, physic)
 			}
-			newPhysics = append(newPhysics, physic)
 		}
 	}
 	if len(newPhysics) == 0 {
-		if err = repository.Ps.DeleteLogicCluster(logic); err != nil {
-			return err
-		}
-	} else {
-		if err = repository.Ps.UpdateLogicCluster(logic, newPhysics); err != nil {
-			return err
-		}
-		if reconf {
-			for _, newLogic := range newPhysics {
-				if err = ConfigLogicOtherCluster(newLogic); err != nil {
-					return err
-				}
-			}
-		}
+		return nil, ps.DeleteLogicCluster(logic)
 	}
-	return nil
+	return newPhysics, ps.UpdateLogicCluster(logic, newPhysics)
+}
+
+// RemovalPackages is BuildPackages for stop, uninstall and destroy: they only
+// need the install folder, so they work even when the package files aren't
+// loaded (or were deleted from ckman).
+func RemovalPackages(version, pkgType, cwd string) Packages {
+	p := BuildPackages(version, pkgType, cwd)
+	if p.Cwd == "" {
+		p.Cwd = cwd
+	}
+	return p
 }
 
 func BuildPackages(version, pkgType, cwd string) Packages {

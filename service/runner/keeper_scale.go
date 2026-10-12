@@ -67,6 +67,9 @@ func KeeperScaleHandle(ctx context.Context, task *model.Task) error {
 		step := cur
 		step.KeeperNodes = append(append([]string{}, cur.KeeperNodes...), host)
 		step.ServerIDs = append(append([]int{}, cur.ServerIDs...), inWant[host])
+		if conf.Docker != nil && d.Conf.Docker != nil {
+			conf.Docker.SetKeeperSize(host, d.Conf.Docker.KeeperSize(host))
+		}
 		sc := withKeepers(step)
 
 		deploy.SetNodeStatus(task, model.NodeStatusInstall, host)
@@ -170,6 +173,9 @@ func KeeperScaleHandle(ctx context.Context, task *model.Task) error {
 		_ = gone.Stop()
 		if err := gone.Uninstall(); err != nil {
 			log.Logger.Warnf("[keepers] %s: remove the Keeper container on %s: %v", conf.Cluster, host, err)
+		}
+		if conf.Docker != nil {
+			delete(conf.Docker.KeeperSizes, host)
 		}
 		if err := save(step); err != nil {
 			return err

@@ -13,6 +13,7 @@ type TblCluster struct {
 	DeleteAt    string `gorm:"column:delete_at"`
 	ClusterName string `gorm:"column:cluster_name;unique"`
 	Config      string `gorm:"column:config"`
+	Status      string `gorm:"column:status;size:16"` // "" or "draft"
 }
 
 func (v TblCluster) TableName() string {

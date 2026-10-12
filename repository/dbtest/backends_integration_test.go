@@ -15,6 +15,9 @@
 package dbtest
 
 import (
+	"sync"
+	"fmt"
+	"errors"
 	"encoding/json"
 	"os"
 	"strconv"
@@ -131,6 +134,8 @@ func runBackend(t *testing.T, bc backendCase) {
 	t.Run("task_crud", func(t *testing.T) { testTaskCRUD(t, mgr) })
 	t.Run("storage_connection_crud", func(t *testing.T) { testStorageConnectionCRUD(t, mgr) })
 	t.Run("fleet_object_crud", func(t *testing.T) { testFleetObjectCRUD(t, mgr) })
+	t.Run("cluster_drafts", func(t *testing.T) { testClusterDrafts(t, mgr) })
+	t.Run("in_tx_concurrent", func(t *testing.T) { testInTxConcurrent(t, mgr) })
 }
 
 func testStorageConnectionCRUD(t *testing.T, mgr repository.PersistentMgr) {
@@ -523,5 +528,92 @@ func testFleetObjectCRUD(t *testing.T, mgr repository.PersistentMgr) {
 	}
 	if err := mgr.DeleteFleetObject(kind, id); err != repository.ErrRecordNotFound {
 		t.Fatalf("second delete = %v, want ErrRecordNotFound", err)
+	}
+}
+
+// Drafts share the clusters table; cluster reads must never return them.
+func testClusterDrafts(t *testing.T, mgr repository.PersistentMgr) {
+	live, draft := tagPrefix+"live", tagPrefix+"draft"
+	_ = mgr.DeleteCluster(live)
+	_ = mgr.DeleteClusterDraft(draft)
+	if err := mgr.CreateCluster(model.CKManClickHouseConfig{Cluster: live}); err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.DeleteCluster(live)
+	if err := mgr.SaveClusterDraft(live, "", []byte(`{}`)); !errors.Is(err, repository.ErrRecordExists) {
+		t.Fatalf("draft over a cluster: %v", err)
+	}
+	if err := mgr.SaveClusterDraft(draft, "", []byte(`{"v":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if mgr.ClusterExists(draft) {
+		t.Fatal("draft visible as a cluster")
+	}
+	if all, _ := mgr.GetAllClusters(); all != nil {
+		if _, ok := all[draft]; ok {
+			t.Fatal("draft listed as a cluster")
+		}
+	}
+	if err := mgr.CreateCluster(model.CKManClickHouseConfig{Cluster: draft}); err != nil {
+		t.Fatalf("create over its draft: %v", err)
+	}
+	if _, err := mgr.GetClusterDraft(draft); err == nil {
+		t.Fatal("draft not replaced by its cluster")
+	}
+	_ = mgr.DeleteCluster(draft)
+}
+
+// Concurrent transactions next to plain writes: each InTx is isolated.
+func testInTxConcurrent(t *testing.T, mgr repository.PersistentMgr) {
+	const n = 6
+	name := func(i int) string { return fmt.Sprintf("%stx%d", tagPrefix, i) }
+	for i := 0; i < n; i++ {
+		_ = mgr.DeleteCluster(name(i))
+		_ = mgr.DeleteTask(name(i))
+		if err := mgr.CreateCluster(model.CKManClickHouseConfig{Cluster: name(i)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := mgr.CreateTask(model.Task{TaskId: name(i), ClusterName: name(i), Status: model.TaskStatusRunning}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2*n)
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			errs <- mgr.InTx(func(tx repository.PersistentMgr) error {
+				if _, err := tx.GetAllTasks(); err != nil {
+					return err
+				}
+				return tx.DeleteCluster(name(i))
+			})
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			task, err := mgr.GetTaskbyTaskId(name(i))
+			if err == nil {
+				task.Status = model.TaskStatusSuccess
+				err = mgr.UpdateTask(task)
+			}
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent write: %v", err)
+		}
+	}
+	for i := 0; i < n; i++ {
+		if mgr.ClusterExists(name(i)) {
+			t.Fatalf("%s not deleted", name(i))
+		}
+		if task, _ := mgr.GetTaskbyTaskId(name(i)); task.Status != model.TaskStatusSuccess {
+			t.Fatalf("%s lost its update", name(i))
+		}
+		_ = mgr.DeleteTask(name(i))
 	}
 }

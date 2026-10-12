@@ -130,6 +130,12 @@ func spec(conf *model.CKManClickHouseConfig, role string) roleSpec {
 	}
 }
 
+// sized is the spec with one instance's limits.
+func (s roleSpec) sized(z model.Size) roleSpec {
+	s.cpu, s.memMB, s.diskGB = z.CPU, z.MemoryMB, z.DiskGB
+	return s
+}
+
 // runCmd is the docker run that creates the container.
 func runCmd(conf *model.CKManClickHouseConfig, s roleSpec) string {
 	r := dockerRoot(conf)
@@ -197,15 +203,17 @@ func limitsHostInfo(conf *model.CKManClickHouseConfig, infos []ckconfig.HostInfo
 		return
 	}
 	for i := range infos {
-		if d.MemoryMB > 0 {
-			infos[i].MemoryTotal = d.MemoryMB * 1024 // KiB, like /proc/meminfo
+		z := d.ServerDefault()
+		if i < len(conf.Hosts) {
+			z = d.ServerSize(conf.Hosts[i])
 		}
-		if d.CPU > 0 {
-			infos[i].NumCPU = int(math.Ceil(d.CPU))
+		if z.MemoryMB > 0 {
+			infos[i].MemoryTotal = z.MemoryMB * 1024 // KiB, like /proc/meminfo
 		}
-	}
-	if d.CPU > 0 {
-		ext.NumCPU = int(math.Ceil(d.CPU))
+		if z.CPU > 0 {
+			infos[i].NumCPU = int(math.Ceil(z.CPU))
+			ext.NumCPU = common.MaxInt(ext.NumCPU, infos[i].NumCPU)
+		}
 	}
 }
 
@@ -223,7 +231,9 @@ func (d *CKDeploy) dockerInstall() error {
 
 func (d *CKDeploy) dockerStart() error {
 	s := spec(d.Conf, roleClickHouse)
-	return dockerOnHosts(d.Conf, d.Conf.Hosts, "start", func(string) string { return startScript(d.Conf, s) })
+	return dockerOnHosts(d.Conf, d.Conf.Hosts, "start", func(host string) string {
+		return startScript(d.Conf, s.sized(d.Conf.Docker.ServerSize(host)))
+	})
 }
 
 func (d *CKDeploy) dockerStop() error {
@@ -270,7 +280,9 @@ func (d *KeeperDeploy) dockerInstall() error {
 
 func (d *KeeperDeploy) dockerStart() error {
 	s := spec(d.Conf, roleKeeper)
-	return dockerOnHosts(d.Conf, d.dockerHosts(), "start keeper", func(string) string { return startScript(d.Conf, s) })
+	return dockerOnHosts(d.Conf, d.dockerHosts(), "start keeper", func(host string) string {
+		return startScript(d.Conf, s.sized(d.Conf.Docker.KeeperSize(host)))
+	})
 }
 
 func (d *KeeperDeploy) dockerStop() error {

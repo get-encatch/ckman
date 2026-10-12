@@ -78,14 +78,19 @@ function TasksPage() {
       col.accessor("Message", {
         header: "Message",
         enableSorting: false,
-        cell: (c) => (
-          <span
-            className="line-clamp-2 max-w-md text-xs text-muted-foreground"
-            title={c.getValue()}
-          >
-            {c.getValue() === "Success" ? "" : c.getValue()}
-          </span>
-        ),
+        cell: (c) => {
+          const warning = c.row.original.Warning
+          const text =
+            warning || (c.getValue() === "Success" ? "" : c.getValue())
+          return (
+            <span
+              className={`line-clamp-2 max-w-md text-xs ${warning ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}
+              title={text}
+            >
+              {warning ? `⚠ ${warning}` : text}
+            </span>
+          )
+        },
       }),
       col.accessor("CreateTime", {
         header: "Started",

@@ -181,3 +181,48 @@ func (fc *FleetController) ScaleKeepers(c *gin.Context) {
 	}
 	fc.wrapfunc(c, model.E_SUCCESS, gin.H{"task_id": taskID})
 }
+
+// ListDrafts: GET /fleet/drafts lists create-cluster drafts.
+func (fc *FleetController) ListDrafts(c *gin.Context) {
+	drafts, err := fleetdeploy.ListDrafts()
+	if err != nil {
+		fc.wrapfunc(c, model.E_DATA_SELECT_FAILED, err)
+		return
+	}
+	fc.wrapfunc(c, model.E_SUCCESS, drafts)
+}
+
+// GetDraft: GET /fleet/drafts/:name
+func (fc *FleetController) GetDraft(c *gin.Context) {
+	d, err := fleetdeploy.GetDraft(c.Param("name"))
+	if err != nil {
+		fc.wrapfunc(c, model.E_RECORD_NOT_FOUND, err)
+		return
+	}
+	fc.wrapfunc(c, model.E_SUCCESS, d)
+}
+
+// SaveDraft: POST /fleet/drafts creates a draft; PUT /fleet/drafts/:name
+// updates (and with a new name, renames) one.
+func (fc *FleetController) SaveDraft(c *gin.Context) {
+	var d fleetdeploy.Draft
+	if err := c.ShouldBindJSON(&d); err != nil {
+		fc.wrapfunc(c, model.E_INVALID_PARAMS, err)
+		return
+	}
+	saved, err := fleetdeploy.SaveDraft(c.Param("name"), d)
+	if err != nil {
+		fc.wrapfunc(c, model.E_DATA_CHECK_FAILED, err)
+		return
+	}
+	fc.wrapfunc(c, model.E_SUCCESS, saved)
+}
+
+// DeleteDraft: DELETE /fleet/drafts/:name
+func (fc *FleetController) DeleteDraft(c *gin.Context) {
+	if err := fleetdeploy.DeleteDraft(c.Param("name")); err != nil {
+		fc.wrapfunc(c, model.E_DATA_DELETE_FAILED, err)
+		return
+	}
+	fc.wrapfunc(c, model.E_SUCCESS, nil)
+}

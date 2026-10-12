@@ -50,52 +50,45 @@ func MigrateBetween(src, dst PersistentMgr) error {
 		return errors.Wrap(err, "get backup runs")
 	}
 
-	if err = dst.Begin(); err != nil {
-		return errors.Wrap(err, "begin")
-	}
-	rollback := func(e error) error {
-		_ = dst.Rollback()
-		return errors.Wrap(e, "")
-	}
+	return dst.InTx(func(tx PersistentMgr) error {
+		rollback := func(e error) error { return errors.Wrap(e, "") }
 
-	for _, cluster := range clusters {
-		if err = dst.CreateCluster(cluster); err != nil {
-			return rollback(err)
+		for _, cluster := range clusters {
+			if err := tx.CreateCluster(cluster); err != nil {
+				return rollback(err)
+			}
 		}
-	}
-	for logic, physics := range logics {
-		if err = dst.CreateLogicCluster(logic, physics); err != nil {
-			return rollback(err)
+		for logic, physics := range logics {
+			if err := tx.CreateLogicCluster(logic, physics); err != nil {
+				return rollback(err)
+			}
 		}
-	}
-	for _, v := range historys {
-		if err = dst.CreateQueryHistory(v); err != nil {
-			return rollback(err)
+		for _, v := range historys {
+			if err := tx.CreateQueryHistory(v); err != nil {
+				return rollback(err)
+			}
 		}
-	}
-	for _, v := range tasks {
-		if err = dst.CreateTask(v); err != nil {
-			return rollback(err)
+		for _, v := range tasks {
+			if err := tx.CreateTask(v); err != nil {
+				return rollback(err)
+			}
 		}
-	}
-	for _, v := range backups {
-		if err = dst.CreateBackup(v); err != nil {
-			return rollback(err)
+		for _, v := range backups {
+			if err := tx.CreateBackup(v); err != nil {
+				return rollback(err)
+			}
 		}
-	}
-	for _, p := range policies {
-		if err = dst.CreateBackupPolicy(p); err != nil {
-			return rollback(err)
+		for _, p := range policies {
+			if err := tx.CreateBackupPolicy(p); err != nil {
+				return rollback(err)
+			}
 		}
-	}
-	for _, r := range runs {
-		if err = dst.CreateBackupRun(r); err != nil {
-			return rollback(err)
+		for _, r := range runs {
+			if err := tx.CreateBackupRun(r); err != nil {
+				return rollback(err)
+			}
 		}
-	}
 
-	if err = dst.Commit(); err != nil {
-		return rollback(err)
-	}
-	return nil
+		return nil
+	})
 }

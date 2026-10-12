@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, Link } from "@tanstack/react-router"
+import { InfoIcon } from "lucide-react"
 
 import {
   keeperHostStatsQuery,
@@ -9,7 +10,7 @@ import {
   type KeeperHostStats,
   type MetricGroup,
 } from "@/api/observability"
-import { clusterQuery, clusterStatusQuery } from "@/api/queries"
+import { clusterQuery, clusterStatusQuery, type Cluster } from "@/api/queries"
 import { MetricChart } from "@/components/app/metric-chart"
 import { ErrorState, Stat } from "@/components/app/misc"
 import { PageBody, Section } from "@/components/app/page-header"
@@ -77,6 +78,7 @@ function OverviewPage() {
   return (
     <PageBody>
       <UnreplicatedBanner cluster={cluster} />
+      <RedundancyNote cluster={cluster} />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label="ClickHouse nodes up"
@@ -363,5 +365,38 @@ function KeeperHostCells({ stats }: { stats: KeeperHostStats | undefined }) {
         {stats.proc_rss ? formatBytes(stats.proc_rss) : "—"}
       </TableCell>
     </>
+  )
+}
+
+// RedundancyNote says what a cluster can't survive yet. Information only:
+// starting with one server and one Keeper is a normal first step.
+function RedundancyNote({ cluster }: { cluster: string }) {
+  const config = useQuery(clusterQuery(cluster))
+  const c: Cluster | undefined = config.data
+  if (!c) return null
+  const single = (c.shards ?? []).some((s) => (s.replicas?.length ?? 0) < 2)
+  const keepers =
+    c.keeper === "clickhouse-keeper"
+      ? (c.KeeperConf?.keeperNodes?.length ?? 0)
+      : (c.zkNodes?.length ?? 0)
+  const notes = [
+    single &&
+      "a shard has a single server, so losing it loses that shard's data access",
+    keepers > 0 &&
+      keepers < 3 &&
+      `with ${keepers} Keeper${keepers === 1 ? "" : "s"}, losing one stops replicated tables from taking writes`,
+  ].filter(Boolean)
+  if (notes.length === 0) return null
+  return (
+    <div className="flex flex-wrap items-start gap-3 rounded-lg border border-sky-500/40 bg-sky-500/10 p-4 text-sm">
+      <InfoIcon className="mt-0.5 size-4 shrink-0 text-sky-600 dark:text-sky-400" />
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="font-medium">Not redundant yet</span>
+        <span className="text-muted-foreground">
+          {notes.join("; ")}. Add replicas and Keepers on the Nodes page when
+          you need it.
+        </span>
+      </div>
+    </div>
   )
 }

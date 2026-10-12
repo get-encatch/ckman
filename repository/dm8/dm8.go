@@ -230,7 +230,7 @@ func (mp *DM8Persistent) ClusterExists(cluster string) bool {
 func (mp *DM8Persistent) GetClusterbyName(cluster string) (model.CKManClickHouseConfig, error) {
 	var conf model.CKManClickHouseConfig
 	var table TblCluster
-	tx := mp.Client.Where("cluster_name = ?", cluster).First(&table)
+	tx := mp.Client.Scopes(notDraft).Where("cluster_name = ?", cluster).First(&table)
 	if tx.Error != nil {
 		return model.CKManClickHouseConfig{}, wrapError(tx.Error)
 	}
@@ -254,7 +254,7 @@ func (mp *DM8Persistent) GetLogicClusterbyName(logic string) ([]string, error) {
 func (mp *DM8Persistent) GetAllClusters() (map[string]model.CKManClickHouseConfig, error) {
 	var tables []TblCluster
 	clusterMapping := make(map[string]model.CKManClickHouseConfig)
-	tx := mp.Client.Find(&tables)
+	tx := mp.Client.Scopes(notDraft).Find(&tables)
 	if tx.Error != nil && tx.Error != gorm.ErrRecordNotFound {
 		return nil, errors.Wrap(tx.Error, "")
 	}
@@ -284,6 +284,10 @@ func (mp *DM8Persistent) GetAllLogicClusters() (map[string][]string, error) {
 }
 
 func (mp *DM8Persistent) CreateCluster(conf model.CKManClickHouseConfig) error {
+	// creating the cluster replaces its draft
+	if err := mp.Client.Unscoped().Where("cluster_name = ? AND status = ?", conf.Cluster, repository.ClusterStatusDraft).Delete(&TblCluster{}).Error; err != nil {
+		return wrapError(err)
+	}
 	if _, err := mp.GetClusterbyName(conf.Cluster); err == nil {
 		//means already exists
 		return repository.ErrRecordExists
@@ -1203,4 +1207,72 @@ func (mp *DM8Persistent) GetAllStorageConnections() ([]model.StorageConnection, 
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+// ─── Cluster drafts ───────────────────────────────────────────────────────────
+// Drafts of the create-cluster form share the clusters table (status "draft");
+// every other cluster query skips them (notDraft).
+
+func notDraft(db *gorm.DB) *gorm.DB {
+	return db.Where("status IS NULL OR status <> ?", repository.ClusterStatusDraft)
+}
+
+func (mp *DM8Persistent) SaveClusterDraft(name, oldName string, body []byte) error {
+	var cur TblCluster
+	err := mp.Client.Where("cluster_name = ?", name).First(&cur).Error
+	if err == nil && cur.Status != repository.ClusterStatusDraft {
+		return repository.ErrRecordExists // a cluster has this name
+	}
+	if oldName != "" && oldName != name {
+		if err == nil {
+			return repository.ErrRecordExists // another draft has this name
+		}
+		tx := mp.Client.Model(&TblCluster{}).Where("cluster_name = ? AND status = ?", oldName, repository.ClusterStatusDraft).
+			Updates(map[string]interface{}{"cluster_name": name, "configuration": dmSchema.Clob(body)})
+		if tx.Error != nil {
+			return wrapError(tx.Error)
+		}
+		if tx.RowsAffected > 0 {
+			return nil
+		}
+	}
+	if err == nil {
+		return wrapError(mp.Client.Model(&TblCluster{}).Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).
+			Updates(map[string]interface{}{"configuration": dmSchema.Clob(body)}).Error)
+	}
+	return wrapError(mp.Client.Create(&TblCluster{ClusterName: name, Configuration: dmSchema.Clob(body), Status: repository.ClusterStatusDraft}).Error)
+}
+
+func (mp *DM8Persistent) GetClusterDraft(name string) ([]byte, error) {
+	var tbl TblCluster
+	if err := mp.Client.Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).First(&tbl).Error; err != nil {
+		return nil, wrapError(err)
+	}
+	return []byte(tbl.Configuration), nil
+}
+
+func (mp *DM8Persistent) ListClusterDrafts() ([][]byte, error) {
+	var tbls []TblCluster
+	if err := mp.Client.Where("status = ?", repository.ClusterStatusDraft).Find(&tbls).Error; err != nil {
+		return nil, wrapError(err)
+	}
+	out := make([][]byte, 0, len(tbls))
+	for _, tbl := range tbls {
+		out = append(out, []byte(tbl.Configuration))
+	}
+	return out, nil
+}
+
+func (mp *DM8Persistent) DeleteClusterDraft(name string) error {
+	return wrapError(mp.Client.Unscoped().Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).Delete(&TblCluster{}).Error)
+}
+
+// InTx runs fn in its own transaction on a copy bound to it (see
+// repository.PersistentBase).
+func (mp *DM8Persistent) InTx(fn func(tx repository.PersistentMgr) error) error {
+	return mp.ParentDB.Transaction(func(tx *gorm.DB) error {
+		cp := *mp
+		cp.Client, cp.ParentDB = tx, tx
+		return fn(&cp)
+	})
 }

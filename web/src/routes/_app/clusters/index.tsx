@@ -9,12 +9,20 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { clusterListQuery, forgetCluster, type Cluster } from "@/api/queries"
+import { deleteDraft, draftsQuery, type ClusterDraft } from "@/api/fleet"
+import {
+  clusterListQuery,
+  forgetCluster,
+  isTaskActive,
+  taskQuery,
+  type Cluster,
+} from "@/api/queries"
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
 import { columnHelper, DataTable } from "@/components/app/data-table"
 import { ImportClusterDialog } from "@/components/app/import-cluster-dialog"
 import { ErrorState } from "@/components/app/misc"
-import { PageBody, PageHeader } from "@/components/app/page-header"
+import { PageBody, PageHeader, Section } from "@/components/app/page-header"
+import { StatusPill } from "@/components/app/status"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -31,6 +39,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { formatAgo } from "@/lib/format"
 
 export const Route = createFileRoute("/_app/clusters/")({
   loader: ({ context }) =>
@@ -151,7 +160,9 @@ function ClustersPage() {
     [isAdmin]
   )
 
-  const empty = clusters.data?.length === 0
+  const drafts = useQuery({ ...draftsQuery(), enabled: isAdmin })
+  const [dropDraft, setDropDraft] = useState<ClusterDraft | null>(null)
+  const empty = clusters.data?.length === 0 && !drafts.data?.length
 
   return (
     <>
@@ -173,6 +184,22 @@ function ClustersPage() {
       />
       <PageBody>
         {clusters.error && <ErrorState error={clusters.error} />}
+        {isAdmin && !!drafts.data?.length && (
+          <Section
+            title="Drafts"
+            description="Create-cluster forms saved part-way. A draft reserves its cluster name."
+          >
+            <ul className="flex flex-col divide-y rounded-lg border">
+              {drafts.data.map((d) => (
+                <DraftRow
+                  key={d.name}
+                  draft={d}
+                  onDelete={() => setDropDraft(d)}
+                />
+              ))}
+            </ul>
+          </Section>
+        )}
         {empty ? (
           <Empty className="border">
             <EmptyHeader>
@@ -201,7 +228,7 @@ function ClustersPage() {
               </EmptyContent>
             )}
           </Empty>
-        ) : (
+        ) : !!clusters.data?.length || clusters.isPending ? (
           <DataTable
             columns={columns}
             data={clusters.data}
@@ -210,9 +237,23 @@ function ClustersPage() {
             searchPlaceholder="Search clusters…"
             getRowId={(c) => c.cluster}
           />
-        )}
+        ) : null}
       </PageBody>
       <ImportClusterDialog open={importOpen} onOpenChange={setImportOpen} />
+      <ConfirmDialog
+        open={dropDraft !== null}
+        onOpenChange={(o) => !o && setDropDraft(null)}
+        title={`Delete the draft ${dropDraft ? draftTitle(dropDraft) : ""}?`}
+        description="The saved form is lost and its cluster name is free again. Nothing was deployed from it."
+        confirmLabel="Delete draft"
+        destructive
+        onConfirm={async () => {
+          if (!dropDraft) return
+          await deleteDraft(dropDraft.name)
+          toast.success("Draft deleted")
+          await queryClient.invalidateQueries({ queryKey: ["cluster-drafts"] })
+        }}
+      />
       <ConfirmDialog
         open={forget !== null}
         onOpenChange={(o) => !o && setForget(null)}
@@ -228,5 +269,71 @@ function ClustersPage() {
         }}
       />
     </>
+  )
+}
+
+const draftTitle = (d: ClusterDraft) =>
+  d.name.startsWith("draft-") ? "Unnamed draft" : d.name
+
+const DRAFT_STEPS = 5
+
+function DraftRow({
+  draft,
+  onDelete,
+}: {
+  draft: ClusterDraft
+  onDelete: () => void
+}) {
+  const task = useQuery({
+    ...taskQuery(draft.task_id ?? ""),
+    enabled: !!draft.task_id,
+  })
+  const status = task.data?.Status
+  return (
+    <li className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
+      <div className="flex min-w-48 flex-col">
+        <span className="font-medium">{draftTitle(draft)}</span>
+        <span className="text-xs text-muted-foreground">
+          Step {Math.min(draft.step + 1, DRAFT_STEPS)} of {DRAFT_STEPS} · saved{" "}
+          {formatAgo(draft.updated_at)}
+        </span>
+      </div>
+      {draft.task_id && status ? (
+        isTaskActive(status) ? (
+          <StatusPill tone="warn" busy label="Creating" />
+        ) : status === "Success" ? (
+          <StatusPill tone="ok" label="Created" />
+        ) : (
+          <StatusPill tone="bad" label="Create failed" />
+        )
+      ) : (
+        <StatusPill tone="info" label="Draft" />
+      )}
+      <div className="ml-auto flex gap-2">
+        {draft.task_id && (
+          <Button
+            size="sm"
+            variant="ghost"
+            nativeButton={false}
+            render={
+              <Link to="/tasks/$taskId" params={{ taskId: draft.task_id }} />
+            }
+          >
+            Task
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          nativeButton={false}
+          render={<Link to="/clusters/new" search={{ draft: draft.name }} />}
+        >
+          Resume
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onDelete}>
+          Delete
+        </Button>
+      </div>
+    </li>
   )
 }

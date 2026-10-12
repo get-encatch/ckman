@@ -53,11 +53,18 @@ func DeployCkCluster(ctx context.Context, task *model.Task, d deploy.CKDeploy) e
 	}
 
 	deploy.SetNodeStatus(task, model.NodeStatusCheck, model.ALL_NODES_DEFAULT)
-	if err := d.Check(30); err != nil {
-		//return errors.Wrapf(err, "[%s]", model.NodeStatusCheck.EN)
-		deploy.SetTaskStatus(task, model.TaskStatusFailed, err.Error())
+	// busy machines can take a while to start a server: wait up to 2 minutes;
+	// past that the cluster is still saved, flagged for a look
+	if err := d.Check(startCheckTimeout); err != nil {
+		deploy.SetTaskWarning(task, notAnswering("ClickHouse", err))
 	}
 	return nil
+}
+
+const startCheckTimeout = 120 // seconds
+
+func notAnswering(what string, err error) string {
+	return fmt.Sprintf("%s didn't answer within %d s after starting: check it on the cluster's Overview (%v)", what, startCheckTimeout, err)
 }
 
 func DestroyCkCluster(ctx context.Context, task *model.Task, d deploy.CKDeploy, conf *model.CKManClickHouseConfig) error {
@@ -167,7 +174,7 @@ func DeleteCkClusterNode(ctx context.Context, task *model.Task, conf *model.CKMa
 	// stop the node
 	deploy.SetNodeStatus(task, model.NodeStatusStop, model.ALL_NODES_DEFAULT)
 	d := deploy.NewCkDeploy(*conf)
-	d.Packages = deploy.BuildPackages(conf.Version, conf.PkgType, conf.Cwd)
+	d.Packages = deploy.RemovalPackages(conf.Version, conf.PkgType, conf.Cwd)
 	d.Conf.Hosts = []string{ip}
 	if err := d.Stop(); err != nil {
 		log.Logger.Warnf("can't stop node %s, ignore it", ip)
@@ -229,6 +236,9 @@ func DeleteCkClusterNode(ctx context.Context, task *model.Task, conf *model.CKMa
 	}
 
 	conf.Hosts = hosts
+	if conf.Docker != nil {
+		delete(conf.Docker.ServerSizes, ip) // a machine added again starts at the default
+	}
 	conf.Shards = shards
 	if d.Conf.Keeper == model.ClickhouseKeeper && d.Conf.KeeperConf.Runtime == model.KeeperRuntimeInternal {
 		conf.KeeperConf.KeeperNodes = make([]string, len(d.Conf.Hosts))
@@ -312,6 +322,11 @@ func AddCkClusterNode(ctx context.Context, task *model.Task, conf *model.CKManCl
 
 	conf.Shards = d.Conf.Shards
 	conf.Hosts = append(conf.Hosts, d.Conf.Hosts...)
+	if conf.Docker != nil && d.Conf.Docker != nil {
+		for _, h := range d.Conf.Hosts {
+			conf.Docker.SetServerSize(h, d.Conf.Docker.ServerSize(h))
+		}
+	}
 	if conf.Keeper == model.ClickhouseKeeper && conf.KeeperConf.Runtime == model.KeeperRuntimeInternal {
 		conf.KeeperConf.KeeperNodes = make([]string, len(conf.Hosts))
 		copy(conf.KeeperConf.KeeperNodes, conf.Hosts)

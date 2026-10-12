@@ -117,6 +117,31 @@ func isTerminalStatus(s int) bool {
 // persisted task already reached a terminal status (typically Stopped from a
 // concurrent user Cancel) — the in-memory copy is stale and would otherwise
 // trample the terminal state back to Running/Success/Failed.
+// saveTask writes a task, retrying briefly: a status that never reaches the
+// database would leave the task looking Running.
+func saveTask(task model.Task) error {
+	var err error
+	for i := 0; i < 4; i++ {
+		if err = repository.Ps.UpdateTask(task); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(100<<i) * time.Millisecond)
+	}
+	return err
+}
+
+// SetTaskWarning notes something to look at on a task that still goes on
+// (and can still succeed).
+func SetTaskWarning(task *model.Task, msg string) {
+	if task.Warning != "" {
+		msg = task.Warning + "; " + msg
+	}
+	task.Warning = msg
+	if err := saveTask(*task); err != nil {
+		log.Logger.Errorf("%s save warning: %v", task.TaskId, err)
+	}
+}
+
 func SetTaskStatus(task *model.Task, status int, msg string) error {
 	fresh, err := repository.Ps.GetTaskbyTaskId(task.TaskId)
 	if err == nil && isTerminalStatus(fresh.Status) && fresh.Status != status {
@@ -125,7 +150,7 @@ func SetTaskStatus(task *model.Task, status int, msg string) error {
 	}
 	task.Status = status
 	task.Message = msg
-	return repository.Ps.UpdateTask(*task)
+	return saveTask(*task)
 }
 
 // SetTaskStep records a top-level phase transition on the task. Used by task
@@ -144,7 +169,7 @@ func SetTaskStep(task *model.Task, step model.Internationalization) {
 		return
 	}
 	task.Step = step
-	if err := repository.Ps.UpdateTask(*task); err != nil {
+	if err := saveTask(*task); err != nil {
 		log.Logger.Errorf("%s %s update task step failed: %v", task.TaskId, task.ClusterName, err)
 	}
 	log.Logger.Infof("[%s] %s current step: %s", task.ClusterName, task.TaskType, step.EN)
@@ -185,7 +210,7 @@ func SetNodeStatus(task *model.Task, status model.Internationalization, host str
 			}
 		}
 	}
-	if err := repository.Ps.UpdateTask(*task); err != nil {
+	if err := saveTask(*task); err != nil {
 		log.Logger.Errorf("%s %s update node status failed: %v", task.TaskId, task.ClusterName, err)
 	}
 	log.Logger.Infof("[%s-%s] %s current step: %s", task.ClusterName, host, task.TaskType, status.EN)

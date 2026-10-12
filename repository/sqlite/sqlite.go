@@ -155,7 +155,6 @@ func writeMeta(db *gorm.DB, key, value string) error {
 	return nil
 }
 
-
 // ─── Cluster ──────────────────────────────────────────────────────────────────
 
 func (sp *SQLitePersistent) ClusterExists(cluster string) bool {
@@ -165,7 +164,7 @@ func (sp *SQLitePersistent) ClusterExists(cluster string) bool {
 
 func (sp *SQLitePersistent) GetClusterbyName(cluster string) (model.CKManClickHouseConfig, error) {
 	var tbl TblCluster
-	if err := sp.Client.Where("cluster_name = ?", cluster).First(&tbl).Error; err != nil {
+	if err := sp.Client.Scopes(notDraft).Where("cluster_name = ?", cluster).First(&tbl).Error; err != nil {
 		return model.CKManClickHouseConfig{}, wrapError(err)
 	}
 	var conf model.CKManClickHouseConfig
@@ -178,7 +177,7 @@ func (sp *SQLitePersistent) GetClusterbyName(cluster string) (model.CKManClickHo
 
 func (sp *SQLitePersistent) GetAllClusters() (map[string]model.CKManClickHouseConfig, error) {
 	var tbls []TblCluster
-	if err := sp.Client.Find(&tbls).Error; err != nil {
+	if err := sp.Client.Scopes(notDraft).Find(&tbls).Error; err != nil {
 		return nil, wrapError(err)
 	}
 	out := make(map[string]model.CKManClickHouseConfig, len(tbls))
@@ -194,6 +193,10 @@ func (sp *SQLitePersistent) GetAllClusters() (map[string]model.CKManClickHouseCo
 }
 
 func (sp *SQLitePersistent) CreateCluster(conf model.CKManClickHouseConfig) error {
+	// creating the cluster replaces its draft
+	if err := sp.Client.Unscoped().Where("cluster_name = ? AND status = ?", conf.Cluster, repository.ClusterStatusDraft).Delete(&TblCluster{}).Error; err != nil {
+		return wrapError(err)
+	}
 	repository.EncodePasswd(&conf)
 	raw, err := json.Marshal(conf)
 	if err != nil {
@@ -216,7 +219,7 @@ func (sp *SQLitePersistent) UpdateCluster(conf model.CKManClickHouseConfig) erro
 	if err != nil {
 		return errors.Wrap(err, "")
 	}
-	tx := sp.Client.Model(&TblCluster{}).Where("cluster_name = ?", conf.Cluster).Updates(map[string]interface{}{
+	tx := sp.Client.Model(&TblCluster{}).Scopes(notDraft).Where("cluster_name = ?", conf.Cluster).Updates(map[string]interface{}{
 		"config": string(raw),
 	})
 	if tx.Error != nil {
@@ -1079,4 +1082,75 @@ func (sp *SQLitePersistent) GetAllStorageConnections() ([]model.StorageConnectio
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+// ─── Cluster drafts ───────────────────────────────────────────────────────────
+// Drafts of the create-cluster form share the clusters table (status "draft");
+// every other cluster query skips them (notDraft).
+
+func notDraft(db *gorm.DB) *gorm.DB {
+	return db.Where("status IS NULL OR status <> ?", repository.ClusterStatusDraft)
+}
+
+func (sp *SQLitePersistent) SaveClusterDraft(name, oldName string, body []byte) error {
+	var cur TblCluster
+	err := sp.Client.Where("cluster_name = ?", name).First(&cur).Error
+	if err == nil && cur.Status != repository.ClusterStatusDraft {
+		return repository.ErrRecordExists // a cluster has this name
+	}
+	if oldName != "" && oldName != name {
+		if err == nil {
+			return repository.ErrRecordExists // another draft has this name
+		}
+		tx := sp.Client.Model(&TblCluster{}).Where("cluster_name = ? AND status = ?", oldName, repository.ClusterStatusDraft).
+			Updates(map[string]interface{}{"cluster_name": name, "config": string(body)})
+		if tx.Error != nil {
+			return wrapError(tx.Error)
+		}
+		if tx.RowsAffected > 0 {
+			return nil
+		}
+	}
+	if err == nil {
+		return wrapError(sp.Client.Model(&TblCluster{}).Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).
+			Updates(map[string]interface{}{"config": string(body)}).Error)
+	}
+	if err := sp.Client.Unscoped().Where("cluster_name = ? AND deleted_at IS NOT NULL", name).Delete(&TblCluster{}).Error; err != nil {
+		return wrapError(err)
+	}
+	return wrapError(sp.Client.Create(&TblCluster{ClusterName: name, Config: string(body), Status: repository.ClusterStatusDraft}).Error)
+}
+
+func (sp *SQLitePersistent) GetClusterDraft(name string) ([]byte, error) {
+	var tbl TblCluster
+	if err := sp.Client.Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).First(&tbl).Error; err != nil {
+		return nil, wrapError(err)
+	}
+	return []byte(tbl.Config), nil
+}
+
+func (sp *SQLitePersistent) ListClusterDrafts() ([][]byte, error) {
+	var tbls []TblCluster
+	if err := sp.Client.Where("status = ?", repository.ClusterStatusDraft).Find(&tbls).Error; err != nil {
+		return nil, wrapError(err)
+	}
+	out := make([][]byte, 0, len(tbls))
+	for _, tbl := range tbls {
+		out = append(out, []byte(tbl.Config))
+	}
+	return out, nil
+}
+
+func (sp *SQLitePersistent) DeleteClusterDraft(name string) error {
+	return wrapError(sp.Client.Unscoped().Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).Delete(&TblCluster{}).Error)
+}
+
+// InTx runs fn in its own transaction on a copy bound to it (see
+// repository.PersistentBase).
+func (sp *SQLitePersistent) InTx(fn func(tx repository.PersistentMgr) error) error {
+	return sp.ParentDB.Transaction(func(tx *gorm.DB) error {
+		cp := *sp
+		cp.Client, cp.ParentDB = tx, tx
+		return fn(&cp)
+	})
 }

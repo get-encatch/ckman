@@ -70,8 +70,11 @@ type Task struct {
 	// expressed as a sequence of named phases rather than per-host node
 	// status (e.g. rebalance, archive). Empty for task types that rely on
 	// NodeStatus exclusively (deploy/upgrade/addnode/...).
-	Step       Internationalization
-	Message    string
+	Step    Internationalization
+	Message string
+	// Warning: the task succeeded, but something needs a look (e.g. a server
+	// that didn't answer within the start check).
+	Warning    string `json:",omitempty"`
 	CreateTime time.Time
 	UpdateTime time.Time
 }
@@ -151,12 +154,13 @@ type TaskStatusResp struct {
 	// Step is the current top-level phase for tasks whose progress is
 	// expressed as a sequence of named phases (rebalance, archive). Empty
 	// for task types that drive progress through NodeStatus exclusively.
-	Step        Internationalization
-	NodeStatus  []NodeStatus
-	Status      string
-	CreateTime  time.Time
-	UpdateTime  time.Time
-	Duration    string
+	Step       Internationalization
+	NodeStatus []NodeStatus
+	Status     string
+	Warning    string `json:",omitempty"`
+	CreateTime time.Time
+	UpdateTime time.Time
+	Duration   string
 }
 
 type TaskResp struct {
@@ -166,6 +170,7 @@ type TaskResp struct {
 	Option      Internationalization
 	Status      string
 	Message     string
+	Warning     string `json:",omitempty"`
 	CreateTime  time.Time
 	UpdateTime  time.Time
 	Duration    string

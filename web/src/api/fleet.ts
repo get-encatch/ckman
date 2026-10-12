@@ -170,6 +170,34 @@ export type DockerConf = {
   keeper_disk_gb: number
   port_slot: number
   ports: DockerPorts
+  // per-instance sizes by host IP; empty fields use the defaults above
+  server_sizes?: Record<string, Size> | null
+  keeper_sizes?: Record<string, Size> | null
+}
+
+// Size is one container's limits; 0 = the cluster default (or no limit).
+export type Size = { cpu: number; memory_mb: number; disk_gb: number }
+
+export const serverSize = (d: DockerConf, ip: string): Size =>
+  withDefault(d.server_sizes?.[ip], {
+    cpu: d.cpu,
+    memory_mb: d.memory_mb,
+    disk_gb: d.disk_gb,
+  })
+
+export const keeperSize = (d: DockerConf, ip: string): Size =>
+  withDefault(d.keeper_sizes?.[ip], {
+    cpu: d.keeper_cpu,
+    memory_mb: d.keeper_memory_mb,
+    disk_gb: d.keeper_disk_gb,
+  })
+
+function withDefault(s: Size | undefined, def: Size): Size {
+  return {
+    cpu: s?.cpu || def.cpu,
+    memory_mb: s?.memory_mb || def.memory_mb,
+    disk_gb: s?.disk_gb || def.disk_gb,
+  }
 }
 
 export type Resources = {
@@ -189,6 +217,9 @@ export type FleetClusterRequest = Resources & {
   keepers: string[] // machine IDs
   password: string
   allow_overcommit: boolean
+  server_sizes?: Size[][] // shaped like shards; 0 fields = the defaults
+  keeper_sizes?: Size[]
+  draft?: string // the draft this create comes from
 }
 
 export type PlanMachine = {
@@ -236,7 +267,12 @@ export function createFleetCluster(body: FleetClusterRequest) {
 // Keeper IPs; an odd number must remain. Returns the task.
 export function scaleKeepers(
   cluster: string,
-  body: { add: string[]; remove: string[]; allow_overcommit: boolean }
+  body: {
+    add: string[]
+    remove: string[]
+    allow_overcommit: boolean
+    sizes?: Record<string, Size> // by machine ID
+  }
 ) {
   return api.post<{ task_id: string }>(
     `/api/v1/fleet/cluster/${enc(cluster)}/keepers`,
@@ -246,7 +282,11 @@ export function scaleKeepers(
 
 export function resizeCluster(
   cluster: string,
-  body: Resources & { allow_overcommit: boolean }
+  body: Resources & {
+    allow_overcommit: boolean
+    server_sizes?: Record<string, Size> // by host IP; others get the defaults
+    keeper_sizes?: Record<string, Size>
+  }
 ) {
   return api.put<{ resized: string[] }>(
     `/api/v1/fleet/cluster/${enc(cluster)}/resources`,
@@ -376,4 +416,44 @@ export function removeStandby(cluster: string, purge: boolean) {
     `/api/v1/fleet/standby/${enc(cluster)}`,
     purge ? { purge: true } : undefined
   )
+}
+
+// ---- Create-cluster drafts ---------------------------------------------------
+
+// A create-cluster form saved half-way; it reserves its cluster name. The
+// password is never saved in a draft.
+export type ClusterDraft = {
+  name: string
+  step: number
+  form: Record<string, unknown>
+  task_id?: string
+  updated_at: string
+}
+
+export const draftsQuery = () =>
+  queryOptions({
+    queryKey: ["cluster-drafts"],
+    queryFn: async () =>
+      (await api.get<ClusterDraft[] | null>("/api/v1/fleet/drafts")) ?? [],
+  })
+
+export const draftQuery = (name: string) =>
+  queryOptions({
+    queryKey: ["cluster-drafts", name],
+    queryFn: () => api.get<ClusterDraft>(`/api/v1/fleet/drafts/${enc(name)}`),
+    staleTime: Infinity,
+  })
+
+// saveDraft creates a draft (no current name) or updates and possibly renames one.
+export function saveDraft(
+  current: string | null,
+  d: Pick<ClusterDraft, "name" | "step" | "form" | "task_id">
+) {
+  return current
+    ? api.put<ClusterDraft>(`/api/v1/fleet/drafts/${enc(current)}`, d)
+    : api.post<ClusterDraft>("/api/v1/fleet/drafts", d)
+}
+
+export function deleteDraft(name: string) {
+  return api.delete(`/api/v1/fleet/drafts/${enc(name)}`)
 }
