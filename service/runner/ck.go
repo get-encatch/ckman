@@ -229,6 +229,9 @@ func DeleteCkClusterNode(ctx context.Context, task *model.Task, conf *model.CKMa
 	}
 
 	conf.Hosts = hosts
+	if conf.Docker != nil {
+		delete(conf.Docker.ServerSizes, ip) // a machine added again starts at the default
+	}
 	conf.Shards = shards
 	if d.Conf.Keeper == model.ClickhouseKeeper && d.Conf.KeeperConf.Runtime == model.KeeperRuntimeInternal {
 		conf.KeeperConf.KeeperNodes = make([]string, len(d.Conf.Hosts))
@@ -312,6 +315,11 @@ func AddCkClusterNode(ctx context.Context, task *model.Task, conf *model.CKManCl
 
 	conf.Shards = d.Conf.Shards
 	conf.Hosts = append(conf.Hosts, d.Conf.Hosts...)
+	if conf.Docker != nil && d.Conf.Docker != nil {
+		for _, h := range d.Conf.Hosts {
+			conf.Docker.SetServerSize(h, d.Conf.Docker.ServerSize(h))
+		}
+	}
 	if conf.Keeper == model.ClickhouseKeeper && conf.KeeperConf.Runtime == model.KeeperRuntimeInternal {
 		conf.KeeperConf.KeeperNodes = make([]string, len(conf.Hosts))
 		copy(conf.KeeperConf.KeeperNodes, conf.Hosts)

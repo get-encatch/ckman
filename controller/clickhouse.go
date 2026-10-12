@@ -1848,7 +1848,18 @@ func (controller *ClickHouseController) AddNode(c *gin.Context) {
 	d.Ext.SourceSchemaHost = req.SourceSchemaHost
 
 	if conf.IsDocker() {
-		if err := fleetdeploy.CheckNewNodes(&conf, req.Ips, force); err != nil {
+		if req.Size != nil && conf.Docker != nil {
+			docker := *conf.Docker
+			docker.ServerSizes = map[string]model.Size{}
+			for k, v := range conf.Docker.ServerSizes {
+				docker.ServerSizes[k] = v
+			}
+			for _, ip := range req.Ips {
+				docker.SetServerSize(ip, *req.Size)
+			}
+			d.Conf.Docker = &docker
+		}
+		if err := fleetdeploy.CheckNewNodes(d.Conf, req.Ips, force); err != nil {
 			controller.wrapfunc(c, model.E_DATA_CHECK_FAILED, err)
 			return
 		}

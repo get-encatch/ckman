@@ -15,9 +15,10 @@ import (
 // KeeperChange adds Keepers on machines the user picks and removes others.
 // The result must be an odd number of Keepers (Raft needs a majority).
 type KeeperChange struct {
-	Add             []string `json:"add"`    // machine IDs
-	Remove          []string `json:"remove"` // Keeper node IPs
-	AllowOvercommit bool     `json:"allow_overcommit"`
+	Add             []string              `json:"add"`    // machine IDs
+	Remove          []string              `json:"remove"` // Keeper node IPs
+	AllowOvercommit bool                  `json:"allow_overcommit"`
+	Sizes           map[string]model.Size `json:"sizes,omitempty"` // by machine ID; default: the cluster's Keeper size
 }
 
 // ScaleKeepers checks a Keeper change and starts it as a task: Keepers are
@@ -50,7 +51,11 @@ func ScaleKeepers(cluster string, req KeeperChange) (string, error) {
 	var addIPs []string
 	seen := map[string]bool{}
 	root := strings.TrimRight(conf.Cwd, "/")
-	d := conf.Docker
+	d := *conf.Docker
+	d.KeeperSizes = map[string]model.Size{}
+	for k, v := range conf.Docker.KeeperSizes {
+		d.KeeperSizes[k] = v
+	}
 	for _, id := range req.Add {
 		m, err := fleet.GetMachine(id)
 		if err != nil {
@@ -76,14 +81,16 @@ func ScaleKeepers(cluster string, req KeeperChange) (string, error) {
 			problems = append(problems, fmt.Sprintf("%s already uses port %s", m.Name, joinInts(busy)))
 		}
 		if !req.AllowOvercommit {
+			z := req.Sizes[id].Or(d.KeeperDefault())
 			st := fleet.Stats(m, true)
 			if st.Error != "" {
 				problems = append(problems, fmt.Sprintf("%s: can't read usage (%s)", m.Name, st.Error))
-			} else if over := overcommit(st, d.KeeperCPU, d.KeeperMemoryMB, d.KeeperDiskGB); over != "" {
+			} else if over := overcommit(st, z.CPU, z.MemoryMB, z.DiskGB); over != "" {
 				problems = append(problems, fmt.Sprintf("%s would be overcommitted: %s", m.Name, over))
 			}
 		}
 		addIPs = append(addIPs, m.IP)
+		d.SetKeeperSize(m.IP, req.Sizes[id])
 	}
 	final := len(kc.KeeperNodes) - len(drop) + len(addIPs)
 	switch {
@@ -119,5 +126,6 @@ func ScaleKeepers(cluster string, req KeeperChange) (string, error) {
 	}
 	dep := deploy.NewCkDeploy(conf)
 	dep.Conf.KeeperConf = &want
+	dep.Conf.Docker = &d
 	return deploy.CreateNewTask(cluster, model.TaskTypeKeeperScale, dep)
 }

@@ -921,3 +921,17 @@ func (lp *LocalPersistent) ListFleetObjects(string) ([][]byte, error) { return [
 func (lp *LocalPersistent) DeleteFleetObject(string, string) error {
 	return repository.ErrRecordNotFound
 }
+
+// The legacy JSON store is only a migration source: it never had drafts.
+
+func (lp *LocalPersistent) SaveClusterDraft(name, oldName string, body []byte) error {
+	return errors.New("the legacy JSON store has no cluster drafts")
+}
+
+func (lp *LocalPersistent) GetClusterDraft(name string) ([]byte, error) {
+	return nil, repository.ErrRecordNotFound
+}
+
+func (lp *LocalPersistent) ListClusterDrafts() ([][]byte, error) { return nil, nil }
+
+func (lp *LocalPersistent) DeleteClusterDraft(name string) error { return nil }

@@ -75,7 +75,8 @@ func (mp *PostgresPersistent) Init(config interface{}) error {
 			update_at    TEXT,
 			delete_at    TEXT,
 			cluster_name VARCHAR(382) UNIQUE,
-			config       TEXT
+			config       TEXT,
+			status       VARCHAR(16) DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS tbl_logic (
 			logic_name      VARCHAR(382) PRIMARY KEY,
@@ -102,6 +103,16 @@ func (mp *PostgresPersistent) Init(config interface{}) error {
 	for _, sql := range coreTblSQLs {
 		if err := mp.Client.Exec(sql).Error; err != nil {
 			return errors.Wrap(err, "create core tables")
+		}
+	}
+	// cluster drafts (status column) on tables created before it existed
+	var hasStatus int64
+	if err := mp.Client.Raw("SELECT count(*) FROM information_schema.columns WHERE table_name = 'tbl_cluster' AND column_name = 'status'").Scan(&hasStatus).Error; err != nil {
+		return errors.Wrap(err, "check tbl_cluster.status")
+	}
+	if hasStatus == 0 {
+		if err := mp.Client.Exec("ALTER TABLE tbl_cluster ADD COLUMN status VARCHAR(16) DEFAULT ''").Error; err != nil {
+			return errors.Wrap(err, "add tbl_cluster.status")
 		}
 	}
 
@@ -232,7 +243,7 @@ func (mp *PostgresPersistent) ClusterExists(cluster string) bool {
 func (mp *PostgresPersistent) GetClusterbyName(cluster string) (model.CKManClickHouseConfig, error) {
 	var conf model.CKManClickHouseConfig
 	var table TblCluster
-	tx := mp.Client.Where("cluster_name = ?", cluster).First(&table)
+	tx := mp.Client.Scopes(notDraft).Where("cluster_name = ?", cluster).First(&table)
 	if tx.Error != nil {
 		return model.CKManClickHouseConfig{}, wrapError(tx.Error)
 	}
@@ -256,7 +267,7 @@ func (mp *PostgresPersistent) GetLogicClusterbyName(logic string) ([]string, err
 func (mp *PostgresPersistent) GetAllClusters() (map[string]model.CKManClickHouseConfig, error) {
 	var tables []TblCluster
 	clusterMapping := make(map[string]model.CKManClickHouseConfig)
-	tx := mp.Client.Find(&tables)
+	tx := mp.Client.Scopes(notDraft).Find(&tables)
 	if tx.Error != nil && tx.Error != gorm.ErrRecordNotFound {
 		return nil, errors.Wrap(tx.Error, "")
 	}
@@ -286,6 +297,10 @@ func (mp *PostgresPersistent) GetAllLogicClusters() (map[string][]string, error)
 }
 
 func (mp *PostgresPersistent) CreateCluster(conf model.CKManClickHouseConfig) error {
+	// creating the cluster replaces its draft
+	if err := mp.Client.Unscoped().Where("cluster_name = ? AND status = ?", conf.Cluster, repository.ClusterStatusDraft).Delete(&TblCluster{}).Error; err != nil {
+		return wrapError(err)
+	}
 	if _, err := mp.GetClusterbyName(conf.Cluster); err == nil {
 		//means already exists
 		return repository.ErrRecordExists
@@ -1188,4 +1203,62 @@ func (mp *PostgresPersistent) GetAllStorageConnections() ([]model.StorageConnect
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+// ─── Cluster drafts ───────────────────────────────────────────────────────────
+// Drafts of the create-cluster form share the clusters table (status "draft");
+// every other cluster query skips them (notDraft).
+
+func notDraft(db *gorm.DB) *gorm.DB {
+	return db.Where("status IS NULL OR status <> ?", repository.ClusterStatusDraft)
+}
+
+func (mp *PostgresPersistent) SaveClusterDraft(name, oldName string, body []byte) error {
+	var cur TblCluster
+	err := mp.Client.Where("cluster_name = ?", name).First(&cur).Error
+	if err == nil && cur.Status != repository.ClusterStatusDraft {
+		return repository.ErrRecordExists // a cluster has this name
+	}
+	if oldName != "" && oldName != name {
+		if err == nil {
+			return repository.ErrRecordExists // another draft has this name
+		}
+		tx := mp.Client.Model(&TblCluster{}).Where("cluster_name = ? AND status = ?", oldName, repository.ClusterStatusDraft).
+			Updates(map[string]interface{}{"cluster_name": name, "config": string(body)})
+		if tx.Error != nil {
+			return wrapError(tx.Error)
+		}
+		if tx.RowsAffected > 0 {
+			return nil
+		}
+	}
+	if err == nil {
+		return wrapError(mp.Client.Model(&TblCluster{}).Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).
+			Updates(map[string]interface{}{"config": string(body)}).Error)
+	}
+	return wrapError(mp.Client.Create(&TblCluster{ClusterName: name, Config: string(body), Status: repository.ClusterStatusDraft}).Error)
+}
+
+func (mp *PostgresPersistent) GetClusterDraft(name string) ([]byte, error) {
+	var tbl TblCluster
+	if err := mp.Client.Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).First(&tbl).Error; err != nil {
+		return nil, wrapError(err)
+	}
+	return []byte(tbl.Config), nil
+}
+
+func (mp *PostgresPersistent) ListClusterDrafts() ([][]byte, error) {
+	var tbls []TblCluster
+	if err := mp.Client.Where("status = ?", repository.ClusterStatusDraft).Find(&tbls).Error; err != nil {
+		return nil, wrapError(err)
+	}
+	out := make([][]byte, 0, len(tbls))
+	for _, tbl := range tbls {
+		out = append(out, []byte(tbl.Config))
+	}
+	return out, nil
+}
+
+func (mp *PostgresPersistent) DeleteClusterDraft(name string) error {
+	return wrapError(mp.Client.Unscoped().Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).Delete(&TblCluster{}).Error)
 }

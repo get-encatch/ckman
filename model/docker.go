@@ -28,6 +28,70 @@ type DockerConf struct {
 	KeeperDiskGB   int         `json:"keeper_disk_gb"`
 	PortSlot       int         `json:"port_slot"`
 	Ports          DockerPorts `json:"ports"`
+	// Per-instance sizes by host IP; a zero field falls back to the cluster
+	// defaults above (one ClickHouse and one Keeper per cluster per machine).
+	ServerSizes map[string]Size `json:"server_sizes,omitempty"`
+	KeeperSizes map[string]Size `json:"keeper_sizes,omitempty"`
+}
+
+// Size is the limits of one container. Disk is a soft limit.
+type Size struct {
+	CPU      float64 `json:"cpu"`
+	MemoryMB int     `json:"memory_mb"`
+	DiskGB   int     `json:"disk_gb"`
+}
+
+func (s Size) IsZero() bool { return s.CPU == 0 && s.MemoryMB == 0 && s.DiskGB == 0 }
+
+// Or fills s's zero fields from def.
+func (s Size) Or(def Size) Size {
+	if s.CPU == 0 {
+		s.CPU = def.CPU
+	}
+	if s.MemoryMB == 0 {
+		s.MemoryMB = def.MemoryMB
+	}
+	if s.DiskGB == 0 {
+		s.DiskGB = def.DiskGB
+	}
+	return s
+}
+
+func (d *DockerConf) ServerDefault() Size { return Size{d.CPU, d.MemoryMB, d.DiskGB} }
+func (d *DockerConf) KeeperDefault() Size {
+	return Size{d.KeeperCPU, d.KeeperMemoryMB, d.KeeperDiskGB}
+}
+
+// ServerSize is the size of the ClickHouse container on host.
+func (d *DockerConf) ServerSize(host string) Size {
+	return d.ServerSizes[host].Or(d.ServerDefault())
+}
+
+// KeeperSize is the size of the Keeper container on host.
+func (d *DockerConf) KeeperSize(host string) Size {
+	return d.KeeperSizes[host].Or(d.KeeperDefault())
+}
+
+// SetServerSize stores host's size; the default size removes the override.
+func (d *DockerConf) SetServerSize(host string, s Size) {
+	d.ServerSizes = setSize(d.ServerSizes, host, s, d.ServerDefault())
+}
+
+func (d *DockerConf) SetKeeperSize(host string, s Size) {
+	d.KeeperSizes = setSize(d.KeeperSizes, host, s, d.KeeperDefault())
+}
+
+func setSize(m map[string]Size, host string, s, def Size) map[string]Size {
+	s = s.Or(def)
+	if s == def || s.IsZero() {
+		delete(m, host)
+		return m
+	}
+	if m == nil {
+		m = map[string]Size{}
+	}
+	m[host] = s
+	return m
 }
 
 type DockerPorts struct {

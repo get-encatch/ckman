@@ -33,6 +33,7 @@ type AddNodeReq struct {
 	Ips              []string `json:"ips" example:"192.168.0.1,192.168.0.2"`
 	Shard            int      `json:"shard" example:"3"`
 	SourceSchemaHost string   `json:"sourceSchemaHost" example:"192.168.0.10"`
+	Size             *Size    `json:"size,omitempty"` // fleet clusters: the new servers' size (default: the cluster's)
 }
 
 type GetLogReq struct {

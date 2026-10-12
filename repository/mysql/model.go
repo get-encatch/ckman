@@ -11,6 +11,7 @@ type TblCluster struct {
 	gorm.Model
 	ClusterName string `gorm:"index:idx_name,unique; column:cluster_name"`
 	Config      string `gorm:"column:config"`
+	Status      string `gorm:"column:status;size:16"` // "" or "draft"
 }
 
 func (v TblCluster) TableName() string {

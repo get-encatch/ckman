@@ -35,6 +35,27 @@ type ClusterRequest struct {
 	KeeperDiskGB    int        `json:"keeper_disk_gb"`
 	Password        string     `json:"password"`
 	AllowOvercommit bool       `json:"allow_overcommit"`
+	// Optional per-instance sizes, shaped like Shards and Keepers; zero
+	// fields use the sizes above.
+	ServerSizes [][]model.Size `json:"server_sizes,omitempty"`
+	KeeperSizes []model.Size   `json:"keeper_sizes,omitempty"`
+	Draft       string         `json:"draft,omitempty"` // the draft this create comes from
+}
+
+func (r ClusterRequest) serverSize(i, j int) model.Size {
+	var s model.Size
+	if i < len(r.ServerSizes) && j < len(r.ServerSizes[i]) {
+		s = r.ServerSizes[i][j]
+	}
+	return s.Or(model.Size{CPU: r.CPU, MemoryMB: r.MemoryMB, DiskGB: r.DiskGB})
+}
+
+func (r ClusterRequest) keeperSize(k int) model.Size {
+	var s model.Size
+	if k < len(r.KeeperSizes) {
+		s = r.KeeperSizes[k]
+	}
+	return s.Or(model.Size{CPU: r.KeeperCPU, MemoryMB: r.KeeperMemoryMB, DiskGB: r.KeeperDiskGB})
 }
 
 // Plan is the checked placement: blocking errors, warnings to confirm, the
@@ -63,10 +84,11 @@ type PlanMachine struct {
 var clusterNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 type placed struct {
-	m     model.Machine
-	roles []string
-	ch    bool
-	keep  bool
+	m             model.Machine
+	roles         []string
+	ch            bool
+	keep          bool
+	chSize, kSize model.Size
 }
 
 // MakePlan checks a request without deploying anything.
@@ -79,6 +101,8 @@ func MakePlan(req ClusterRequest) (Plan, map[string]*placed) {
 		fail("Cluster name: start with a letter; letters, digits and '_' only")
 	} else if repository.Ps.ClusterExists(req.Cluster) {
 		fail("A cluster named %s already exists", req.Cluster)
+	} else if _, err := repository.Ps.GetClusterDraft(req.Cluster); err == nil && req.Draft != req.Cluster {
+		fail("A draft already reserves the name %s", req.Cluster)
 	}
 	if req.Version == "" {
 		fail("Choose a ClickHouse version")
@@ -140,7 +164,17 @@ func MakePlan(req ClusterRequest) (Plan, map[string]*placed) {
 				fail("%s runs two ClickHouse instances of this cluster (%s): each instance needs its own machine", u.m.Name, strings.Join(u.roles, ", "))
 			}
 			u.ch = true
+			u.chSize = req.serverSize(i, j)
+			if z := u.chSize; z.MemoryMB > 0 && z.MemoryMB < 1024 {
+				warn("%s: ClickHouse with less than 1 GiB of memory fails on bigger queries and merges", role)
+			}
 			shardZones[u.m.Zone]++
+		}
+		for j := 1; j < len(shard); j++ {
+			if req.serverSize(i, j) != req.serverSize(i, 0) {
+				warn("Shard %d has replicas of different sizes: queries sent to a smaller one are slower", i+1)
+				break
+			}
 		}
 		if len(shard) > 1 && len(zones) > 1 {
 			for z, n := range shardZones {
@@ -160,6 +194,10 @@ func MakePlan(req ClusterRequest) (Plan, map[string]*placed) {
 			fail("%s is chosen for two Keepers: losing it would break the Keeper majority", u.m.Name)
 		}
 		u.keep = true
+		u.kSize = req.keeperSize(k)
+		if z := u.kSize; z.MemoryMB > 0 && z.MemoryMB < 256 {
+			warn("keeper %d: less than 256 MiB of memory may get it killed under load", k+1)
+		}
 		keeperZones[u.m.Zone]++
 		if u.ch {
 			warn("Keeper shares %s with ClickHouse: fine for small setups; production prefers dedicated Keeper machines", u.m.Name)
@@ -192,13 +230,6 @@ func MakePlan(req ClusterRequest) (Plan, map[string]*placed) {
 		if u.m.Facts.Arch != first.m.Facts.Arch {
 			fail("Machines have different CPU types (%s: %s, %s: %s)", first.m.Name, first.m.Facts.Arch, u.m.Name, u.m.Facts.Arch)
 		}
-	}
-
-	if req.MemoryMB > 0 && req.MemoryMB < 1024 {
-		warn("ClickHouse with less than 1 GiB of memory fails on bigger queries and merges")
-	}
-	if req.KeeperMemoryMB > 0 && req.KeeperMemoryMB < 256 {
-		warn("Keeper with less than 256 MiB of memory may be killed under load")
 	}
 
 	slot, slotErr := freePortSlot()
@@ -242,14 +273,14 @@ func MakePlan(req ClusterRequest) (Plan, map[string]*placed) {
 			CPU: l.st.ReservedCPU, CPUTotal: float64(l.st.Cores), Mem: l.st.ReservedMem, MemTotal: l.st.MemTotal,
 			Disk: l.st.ReservedDisk, DiskTotal: l.st.DiskTotal}
 		if u.ch {
-			pm.CPU += req.CPU
-			pm.Mem += uint64(req.MemoryMB) << 20
-			pm.Disk += uint64(req.DiskGB) << 30
+			pm.CPU += u.chSize.CPU
+			pm.Mem += uint64(u.chSize.MemoryMB) << 20
+			pm.Disk += uint64(u.chSize.DiskGB) << 30
 		}
 		if u.keep {
-			pm.CPU += req.KeeperCPU
-			pm.Mem += uint64(req.KeeperMemoryMB) << 20
-			pm.Disk += uint64(req.KeeperDiskGB) << 30
+			pm.CPU += u.kSize.CPU
+			pm.Mem += uint64(u.kSize.MemoryMB) << 20
+			pm.Disk += uint64(u.kSize.DiskGB) << 30
 		}
 		p.Machines = append(p.Machines, pm)
 		over := []string{}
@@ -361,6 +392,14 @@ func buildConfig(req ClusterRequest, p Plan, use map[string]*placed) (model.CKMa
 	}
 	for _, id := range req.Keepers {
 		conf.KeeperConf.KeeperNodes = append(conf.KeeperConf.KeeperNodes, ip(id))
+	}
+	for i, shard := range req.Shards {
+		for j, id := range shard {
+			conf.Docker.SetServerSize(ip(id), req.serverSize(i, j))
+		}
+	}
+	for k, id := range req.Keepers {
+		conf.Docker.SetKeeperSize(ip(id), req.keeperSize(k))
 	}
 	conf.Normalize()
 	conf.NeedSudo = false
