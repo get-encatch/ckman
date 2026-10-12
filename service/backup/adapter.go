@@ -222,6 +222,18 @@ func newRealExecutor(repo ExecRepo, chAdapter *ClickHouseAdapter) *Executor {
 		stages:                realStages{},
 	}
 
+	// backupSize: what a native BACKUP to key stored, from system.backups
+	e.backupSize = func(host, key string) (uint64, error) {
+		for _, c := range e.conns {
+			if c.host == host && c.conn != nil {
+				var n uint64
+				err := c.conn.QueryRow(fmt.Sprintf("SELECT toUInt64(compressed_size) FROM system.backups WHERE status = 'BACKUP_CREATED' AND position(name, '%s') > 0 ORDER BY end_time DESC LIMIT 1", strings.ReplaceAll(key, "'", ""))).Scan(&n)
+				return n, err
+			}
+		}
+		return 0, fmt.Errorf("no conn for host %s", host)
+	}
+
 	// execSQL hook：从本实例 e.conns 按 host 找 conn 直接调 Exec
 	e.execSQL = func(host, sql string) error {
 		for _, c := range e.conns {
@@ -310,7 +322,9 @@ func Init(ctx context.Context, self string, maxConcurrent int, chAdapter *ClickH
 	repo := PersistentRepoAdapter{}
 
 	var inFlightPolicies sync.Map // policyID → runID，policy 维度执行互斥
+	var svc *Service              // set below; runs only start after it is
 	pool := NewPool(maxConcurrent, func(ctx context.Context, runID string) {
+		defer func() { svc.AfterRun(runID) }() // failed backups get a retry
 		executeExclusive(repo, &inFlightPolicies, runID,
 			func(id string) bool { return claimRun(repository.Ps.MarkRunRunningIfQueued, id, self) },
 			func(id string) {
@@ -323,7 +337,8 @@ func Init(ctx context.Context, self string, maxConcurrent int, chAdapter *ClickH
 			})
 	})
 
-	svc := NewService(self, repo, pool)
+	svc = NewService(self, repo, pool)
+	svc.allRuns = repository.Ps.GetAllBackupRuns
 	if err := svc.Boot(); err != nil {
 		return nil, err
 	}
