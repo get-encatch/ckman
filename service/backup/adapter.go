@@ -209,6 +209,7 @@ func newRealExecutor(repo ExecRepo, chAdapter *ClickHouseAdapter) *Executor {
 	e := &Executor{
 		repo:                 repo,
 		connFactory:          chAdapter.ConnFactory,
+		connFactoryFor:       chAdapter.ConnFactoryFor,
 		listPartitions:       chAdapter.ListPartitions,
 		listAllPartitions:    chAdapter.ListAllPartitions,
 		getLastRunPartitions: chAdapter.GetLastRunPartitions,

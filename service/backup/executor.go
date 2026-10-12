@@ -32,6 +32,7 @@ type shardConn struct {
 	conn    *common.Conn // 真实 adapter 注入；测试 fake 留 nil
 	cluster string       // CH 集群名(remote_servers 里的),供分区发现走 clusterAllReplicas 用
 	shard   int          // 1-based shard number (native backups are keyed by shard, not host)
+	note    string       // why this replica was picked, if worth telling
 }
 
 // stages 让 Executor 把 5 个阶段分别可单测。
@@ -55,6 +56,7 @@ func (stagesStub) Close(context.Context, *Executor, string) error   { return nil
 type Executor struct {
 	repo                 ExecRepo
 	connFactory          func(cluster string, maxBandwidthMB int) ([]*shardConn, error)
+	connFactoryFor       func(cluster, db, table string, maxBandwidthMB int) ([]*shardConn, error) // picks each shard's replica for this table; nil: connFactory
 	listPartitions       func(c *shardConn, db, table, fromYYYYMMDD, toYYYYMMDD string) ([]string, error)
 	listAllPartitions    func(c *shardConn, db, table string) ([]string, error)
 	getLastRunPartitions func(cluster, db, table string) ([]model.BackupRunPartition, error)
@@ -169,7 +171,12 @@ func (e *Executor) Init(ctx context.Context, runID string) error {
 	if err != nil {
 		return err
 	}
-	conns, err := e.connFactory(policy.ClusterName, runBandwidthMB(r, policy))
+	var conns []*shardConn
+	if e.connFactoryFor != nil {
+		conns, err = e.connFactoryFor(policy.ClusterName, policy.Database, policy.Table, runBandwidthMB(r, policy))
+	} else {
+		conns, err = e.connFactory(policy.ClusterName, runBandwidthMB(r, policy))
+	}
 	if err != nil {
 		return fmt.Errorf("connect cluster %s: %w", policy.ClusterName, err)
 	}

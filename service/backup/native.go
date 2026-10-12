@@ -183,7 +183,7 @@ func (e *Executor) nativeBackup(run model.BackupRun) error {
 	var errs []string
 	run.Shards = nil
 	for _, r := range results {
-		sr := model.BackupShardResult{Shard: r.conn.shard, Host: r.conn.host, Elapsed: int(r.elapsed.Seconds())}
+		sr := model.BackupShardResult{Shard: r.conn.shard, Host: r.conn.host, Elapsed: int(r.elapsed.Seconds()), Note: r.conn.note}
 		if r.err != nil {
 			sr.Error = r.err.Error()
 			errs = append(errs, fmt.Sprintf("[%s] %v", r.conn.host, r.err))
