@@ -136,7 +136,6 @@ func InitRouterV1(groupV1 *gin.RouterGroup, config *config.CKManConfig, signal c
 	groupV1.PUT(fmt.Sprintf("/ck/node/stop/:%s", controller.ClickHouseClusterPath), ckController.StopNode)
 	groupV1.PUT(fmt.Sprintf("/ck/node/restart/:%s", controller.ClickHouseClusterPath), ckController.RestartNode)
 	groupV1.GET(fmt.Sprintf("/ck/table/unreplicated/:%s", controller.ClickHouseClusterPath), ckController.ListUnreplicatedTables)
-	groupV1.POST(fmt.Sprintf("/ck/table/convert_replicated/:%s", controller.ClickHouseClusterPath), ckController.ConvertTableToReplicated)
 	groupV1.GET(fmt.Sprintf("/ck/node/override/:%s", controller.ClickHouseClusterPath), overrideController.Get)
 	groupV1.PUT(fmt.Sprintf("/ck/node/override/:%s", controller.ClickHouseClusterPath), overrideController.Put)
 	groupV1.DELETE(fmt.Sprintf("/ck/node/override/:%s", controller.ClickHouseClusterPath), overrideController.Delete)
