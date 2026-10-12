@@ -5,18 +5,19 @@ import (
 	"github.com/housepower/ckman/model"
 )
 
-var (
-	DefaultSigningKey = "change me"
-)
+// signingKey signs login tokens. The fixed default is only a fallback: the
+// server loads the installation's random key at start (session.LoadSigningKey).
+var signingKey = []byte("change me")
+
+// SetSigningKey sets the key that signs and checks login tokens.
+func SetSigningKey(key []byte) { signingKey = key }
 
 type JWT struct {
 	SigningKey []byte
 }
 
 func NewJWT() *JWT {
-	return &JWT{
-		[]byte(DefaultSigningKey),
-	}
+	return &JWT{signingKey}
 }
 
 type CustomClaims struct {

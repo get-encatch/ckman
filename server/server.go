@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"github.com/housepower/ckman/service/session"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -12,8 +13,6 @@ import (
 
 	"github.com/go-errors/errors"
 	jsoniter "github.com/json-iterator/go"
-
-	"github.com/patrickmn/go-cache"
 
 	"github.com/arl/statsviz"
 	"github.com/gin-contrib/pprof"
@@ -68,7 +67,10 @@ func (server *ApiServer) Start() error {
 	r.Use(ginLoggerToFile())
 	r.Use(gin.CustomRecoveryWithWriter(nil, handlePanic))
 
-	controller.TokenCache = cache.New(time.Duration(server.config.Server.SessionTimeout)*time.Second, time.Minute)
+	if err := session.LoadSigningKey(); err != nil {
+		return err
+	}
+	session.StartSweeper(make(chan struct{}))
 	userController := controller.NewUserController(server.config, router.WrapMsg)
 
 	r.Use(Serve("/", EmbedFolder(server.fs, "static/dist"), server.modTime))
@@ -242,8 +244,8 @@ func ginJWTAuth() gin.HandlerFunc {
 			return
 		}
 
-		// Verify Expires
-		if _, ok := controller.TokenCache.Get(token); !ok {
+		// Verify the session is live (kept in the database, see service/session)
+		if !session.Valid(token) {
 			router.WrapMsg(c, model.E_JWT_TOKEN_EXPIRED, nil)
 			c.Abort()
 			return
@@ -297,7 +299,7 @@ func ginRefreshTokenExpires() gin.HandlerFunc {
 		if value, exists := c.Get("token"); exists {
 			token := value.(string)
 			if token != "" {
-				controller.TokenCache.SetDefault(token, time.Now().Add(time.Second*time.Duration(config.GlobalConfig.Server.SessionTimeout)).Unix())
+				session.Touch(token, time.Second*time.Duration(config.GlobalConfig.Server.SessionTimeout))
 			}
 		}
 	}
