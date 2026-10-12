@@ -627,13 +627,17 @@ function ResizeSection({
     >
       <div className="flex flex-col gap-4 rounded-lg border p-4">
         <div className="flex flex-wrap items-end gap-3">
-          <span className="w-32 pb-2 text-sm font-medium">ClickHouse</span>
+          <span className="w-full text-sm font-medium sm:w-32 sm:pb-2">
+            ClickHouse
+          </span>
           {input("cpu", "CPU cores")}
           {input("memory_mb", "Memory MiB")}
           {input("disk_gb", "Disk GiB")}
         </div>
         <div className="flex flex-wrap items-end gap-3">
-          <span className="w-32 pb-2 text-sm font-medium">Keeper</span>
+          <span className="w-full text-sm font-medium sm:w-32 sm:pb-2">
+            Keeper
+          </span>
           {input("keeper_cpu", "Keeper CPU")}
           {input("keeper_memory_mb", "Keeper MiB")}
           {input("keeper_disk_gb", "Keeper disk GiB")}
