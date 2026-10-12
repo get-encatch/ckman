@@ -88,6 +88,9 @@ func (s *Service) retry(runID string, manual bool) (string, error) {
 	if err != nil || p.Deleted {
 		return drop("the backup was deleted")
 	}
+	if s.clusterExists != nil && !s.clusterExists(p.ClusterName) {
+		return drop("cluster " + p.ClusterName + " no longer exists")
+	}
 	if !manual {
 		if p.ScheduleType == model.BACKUP_SCHEDULED && !p.Enabled {
 			return drop("the backup is paused")

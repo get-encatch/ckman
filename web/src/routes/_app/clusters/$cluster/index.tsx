@@ -11,6 +11,7 @@ import {
   type MetricGroup,
 } from "@/api/observability"
 import { clusterQuery, clusterStatusQuery, type Cluster } from "@/api/queries"
+import { backupHealthQuery } from "@/api/data-manage"
 import { MetricChart } from "@/components/app/metric-chart"
 import { ErrorState, Stat } from "@/components/app/misc"
 import { PageBody, Section } from "@/components/app/page-header"
@@ -79,7 +80,7 @@ function OverviewPage() {
     <PageBody>
       <UnreplicatedBanner cluster={cluster} />
       <RedundancyNote cluster={cluster} />
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Stat
           label="ClickHouse nodes up"
           value={
@@ -122,6 +123,7 @@ function OverviewPage() {
           value={status.data?.version || config.data?.version || "—"}
           hint={config.data?.pkgType}
         />
+        <BackupsStat cluster={cluster} />
       </div>
 
       <Section
@@ -398,5 +400,45 @@ function RedundancyNote({ cluster }: { cluster: string }) {
         </span>
       </div>
     </div>
+  )
+}
+
+// BackupsStat: how this cluster's backups are doing, linking to its Backups tab.
+function BackupsStat({ cluster }: { cluster: string }) {
+  const health = useQuery(backupHealthQuery(cluster))
+  const items = health.data ?? []
+  const bad = items.filter(
+    (h) => h.state === "failing" || h.state === "overdue"
+  ).length
+  const retrying = items.filter((h) => h.state === "retrying").length
+  const ok = items.filter(
+    (h) => h.state === "healthy" || h.state === "running"
+  ).length
+  return (
+    <Stat
+      label="Backups"
+      value={
+        health.isPending ? (
+          <Skeleton className="h-8 w-16" />
+        ) : (
+          <Link
+            to="/clusters/$cluster/backups"
+            params={{ cluster }}
+            className={`hover:underline ${bad ? "text-red-700 dark:text-red-400" : ""}`}
+          >
+            {items.length === 0 ? "None" : `${ok} / ${items.length}`}
+          </Link>
+        )
+      }
+      hint={
+        items.length === 0
+          ? "No backups set up"
+          : bad
+            ? `${bad} failing or overdue`
+            : retrying
+              ? `${retrying} retrying`
+              : "Tables backed up on schedule"
+      }
+    />
   )
 }

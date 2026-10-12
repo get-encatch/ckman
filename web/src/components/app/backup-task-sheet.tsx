@@ -8,6 +8,8 @@ import {
   describeMode,
   partitionLabel,
   isZeroTime,
+  MAX_ATTEMPTS,
+  retryRun,
   nextRunQuery,
   policyRunsQuery,
   restoreFromRun,
@@ -121,6 +123,7 @@ export function BackupTaskSheet({
                 {c.row.original.status_reason.replaceAll("_", " ")}
               </span>
             )}
+            <RetryNote run={c.row.original} />
           </div>
         ),
       }),
@@ -129,7 +132,9 @@ export function BackupTaskSheet({
         header: "Partitions",
       }),
       runCol.accessor(
-        (r) => (r.partitions ?? []).reduce((n, p) => n + p.size, 0),
+        (r) =>
+          (r.shards ?? []).reduce((n, x) => n + x.bytes, 0) ||
+          (r.partitions ?? []).reduce((n, p) => n + p.size, 0),
         {
           id: "size",
           header: "Size",
@@ -319,6 +324,8 @@ function RunDialog({
         </DialogHeader>
         {run.error && <ErrorState error={run.error} />}
         {r?.error_msg && <ErrorState error={new Error(r.error_msg)} />}
+        {r && <RetryPanel run={r} canWrite={canWrite} />}
+        {r && (r.shards ?? []).length > 0 && <ShardTable run={r} />}
         {r && (
           <div className="max-h-[50vh] overflow-auto rounded-lg border">
             <table className="w-full text-sm">
@@ -464,5 +471,107 @@ function RunDialog({
         />
       </DialogContent>
     </Dialog>
+  )
+}
+
+const timeSet = (t?: string) => !!t && !isZeroTime(t)
+
+// RetryNote: a run's place in its retries, under its status.
+function RetryNote({ run }: { run: BackupRun }) {
+  const attempt = run.attempt ?? 1
+  const parts: string[] = []
+  if (attempt > 1) parts.push(`attempt ${attempt} of ${MAX_ATTEMPTS}`)
+  if (timeSet(run.next_retry_at))
+    parts.push(`retry at ${formatDateTime(run.next_retry_at)}`)
+  else if (run.retried_by) parts.push("retried")
+  if (parts.length === 0) return null
+  return (
+    <span className="text-xs text-muted-foreground">{parts.join(" · ")}</span>
+  )
+}
+
+// RetryPanel: retry information and the Retry button of a failed backup.
+function RetryPanel({ run, canWrite }: { run: BackupRun; canWrite: boolean }) {
+  const queryClient = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const failed = run.status === "failed" || run.status === "interrupted"
+  if (run.operation !== "backup" || (!failed && (run.attempt ?? 1) === 1))
+    return null
+  const attempt = run.attempt ?? 1
+  async function retry() {
+    setBusy(true)
+    try {
+      await retryRun(run.run_id)
+      toast.success("Retry queued")
+      await queryClient.invalidateQueries({ queryKey: ["backup-policy-runs"] })
+      await queryClient.invalidateQueries({
+        queryKey: ["backup-run", run.run_id],
+      })
+      await queryClient.invalidateQueries({ queryKey: ["backup-health"] })
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3 text-sm">
+      <span>
+        Attempt {attempt} of {MAX_ATTEMPTS}.{" "}
+        {timeSet(run.next_retry_at)
+          ? `Retries automatically at ${formatDateTime(run.next_retry_at)}.`
+          : run.retried_by
+            ? "A retry has run."
+            : failed
+              ? "No automatic retry left."
+              : ""}
+      </span>
+      {failed && canWrite && !run.retried_by && (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => void retry()}
+        >
+          {busy ? "Queuing…" : "Retry now"}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+// ShardTable: which replica each shard of a native backup was read from.
+function ShardTable({ run }: { run: BackupRun }) {
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <table className="w-full text-sm">
+        <thead className="bg-muted text-left text-xs text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2">Shard</th>
+            <th className="px-3 py-2">Read from</th>
+            <th className="px-3 py-2 text-right">Stored</th>
+            <th className="px-3 py-2 text-right">Took</th>
+            <th className="px-3 py-2">Error</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {(run.shards ?? []).map((x) => (
+            <tr key={x.shard}>
+              <td className="px-3 py-1.5 tabular-nums">{x.shard}</td>
+              <td className="px-3 py-1.5 font-mono">{x.host}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums">
+                {x.bytes ? formatBytes(x.bytes) : "—"}
+              </td>
+              <td className="px-3 py-1.5 text-right tabular-nums">
+                {x.elapsed} s
+              </td>
+              <td className="px-3 py-1.5 text-xs text-destructive">
+                {x.error}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }

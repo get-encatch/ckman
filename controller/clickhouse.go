@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"github.com/housepower/ckman/service/backup"
 	"net/http"
 	"path"
 	"reflect"
@@ -175,6 +176,7 @@ func (controller *ClickHouseController) DeleteCluster(c *gin.Context) {
 		controller.wrapfunc(c, model.E_DATA_DELETE_FAILED, err)
 		return
 	}
+	backup.PauseClusterBackups(clusterName)
 
 	controller.wrapfunc(c, model.E_SUCCESS, nil)
 }

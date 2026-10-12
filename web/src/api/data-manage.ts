@@ -90,6 +90,70 @@ export type BackupRun = {
   elapsed: number
   error_msg: string
   create_time: string
+  // retries of failed backups
+  attempt?: number // 1-based; missing = 1
+  retry_of?: string
+  next_retry_at?: string
+  retried_by?: string
+  // native backups: what each shard did
+  shards?: ShardResult[] | null
+}
+
+export type ShardResult = {
+  shard: number
+  host: string // the replica it was read from
+  bytes: number
+  elapsed: number
+  error?: string
+}
+
+// MAX_ATTEMPTS mirrors the backend: a backup is tried at most this often.
+export const MAX_ATTEMPTS = 4
+
+export type BackupHealthState =
+  | "healthy"
+  | "running"
+  | "retrying"
+  | "failing"
+  | "overdue"
+  | "paused"
+  | "waiting"
+
+export type BackupHealth = {
+  policy_id: string
+  task_id: string
+  task_name: string
+  cluster: string
+  database: string
+  table: string
+  schedule: string // "" = one-off
+  state: BackupHealthState
+  last_run_id?: string
+  last_status?: string
+  last_run_at?: string
+  last_success?: string
+  next_due?: string
+  next_retry_at?: string
+  attempt?: number
+  error?: string
+}
+
+// backupHealthQuery: the health of every backup of a cluster, or of all.
+export const backupHealthQuery = (cluster?: string) =>
+  queryOptions({
+    queryKey: ["backup-health", cluster ?? "*"],
+    queryFn: async () =>
+      (await api.get<BackupHealth[] | null>(
+        "/api/v1/data_manage/backup_health",
+        cluster ? { cluster } : undefined
+      )) ?? [],
+    refetchInterval: 30_000,
+  })
+
+export function retryRun(runId: string) {
+  return api.post<{ run_id: string }>(
+    `/api/v1/data_manage/backup/run/${enc(runId)}/retry`
+  )
 }
 
 export const isZeroTime = (t: string | undefined) =>

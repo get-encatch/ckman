@@ -43,6 +43,7 @@ type Service struct {
 	getClusterByName func(name string) (model.CKManClickHouseConfig, error)
 	storageFactory   func(policy model.BackupPolicy, cc model.CKManClickHouseConfig) BackupStorage
 	allRuns          func() ([]model.BackupRun, error) // every run, to re-arm retries at start (nil: none)
+	clusterExists    func(name string) bool            // nil: assume it does
 }
 
 func NewService(self string, repo ServiceRepo, pool ServicePool) *Service {

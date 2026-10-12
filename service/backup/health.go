@@ -4,6 +4,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/housepower/ckman/log"
 	"github.com/housepower/ckman/model"
 	"github.com/housepower/ckman/repository"
 )
@@ -64,7 +65,12 @@ func Health(cluster string, now time.Time) ([]PolicyHealth, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, policyHealth(p, runs, now))
+		h := policyHealth(p, runs, now)
+		if !repository.Ps.ClusterExists(p.ClusterName) {
+			h.State, h.NextDue, h.NextRetryAt = HealthFailing, time.Time{}, time.Time{}
+			h.Error = "cluster " + p.ClusterName + " no longer exists: delete this backup once its files are no longer needed"
+		}
+		out = append(out, h)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Cluster != out[j].Cluster {
@@ -160,4 +166,25 @@ func nextDue(p model.BackupPolicy, base time.Time) time.Time {
 		}
 	}
 	return next
+}
+
+// PauseClusterBackups switches off the schedules of a cluster's backups when
+// the cluster is destroyed or removed from ckman. The backups and their runs
+// stay listed, so their files can still be found.
+func PauseClusterBackups(cluster string) {
+	policies, err := repository.Ps.GetAllBackupPolicies()
+	if err != nil {
+		return
+	}
+	for _, p := range policies {
+		if p.ClusterName != cluster || p.Deleted || !p.Enabled || p.ScheduleType != model.BACKUP_SCHEDULED {
+			continue
+		}
+		p.Enabled = false
+		if err := repository.Ps.UpdateBackupPolicy(p); err != nil {
+			log.Logger.Warnf("[backup] pause backup %s of removed cluster %s: %v", p.PolicyID, cluster, err)
+			continue
+		}
+		log.Logger.Infof("[backup] cluster %s is gone: backup %s.%s paused", cluster, p.Database, p.Table)
+	}
 }

@@ -339,6 +339,17 @@ func Init(ctx context.Context, self string, maxConcurrent int, chAdapter *ClickH
 
 	svc = NewService(self, repo, pool)
 	svc.allRuns = repository.Ps.GetAllBackupRuns
+	svc.clusterExists = repository.Ps.ClusterExists
+	// backups left behind by clusters removed before this check existed
+	if policies, err := repository.Ps.GetAllBackupPolicies(); err == nil {
+		gone := map[string]bool{}
+		for _, p := range policies {
+			if p.Enabled && !p.Deleted && !gone[p.ClusterName] && !repository.Ps.ClusterExists(p.ClusterName) {
+				gone[p.ClusterName] = true
+				PauseClusterBackups(p.ClusterName)
+			}
+		}
+	}
 	if err := svc.Boot(); err != nil {
 		return nil, err
 	}
