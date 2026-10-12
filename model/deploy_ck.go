@@ -125,9 +125,10 @@ type CKManClickHouseConfig struct {
 	NodeOverrides map[string]string `json:"nodeOverrides,omitempty" swaggerignore:"true"`
 
 	// don't need to regist to schema
-	Mode     string `json:"mode" swaggerignore:"true"`
-	NeedSudo bool   `json:"needSudo" swaggerignore:"true"`
-	Docker *DockerConf `json:"docker,omitempty" swaggerignore:"true"` // fleet clusters: containers on machines
+	Mode     string      `json:"mode" swaggerignore:"true"`
+	NeedSudo bool        `json:"needSudo" swaggerignore:"true"`
+	Docker   *DockerConf `json:"docker,omitempty" swaggerignore:"true"` // fleet clusters: containers on machines
+	Access   *AccessConf `json:"access,omitempty" swaggerignore:"true"` // fleet standby: read-only apps + sync user
 }
 
 // TlsConf 保存集群的服务端 TLS 证书。全集群共用一套，随集群配置一起落库。
@@ -426,6 +427,11 @@ func (config *CKManClickHouseConfig) UnWatch(host string) {
 
 func (config *CKManClickHouseConfig) Pack() {
 	config.Password = strings.Repeat("*", len(config.Password))
+	if config.Access != nil {
+		access := *config.Access
+		access.SyncPassword = strings.Repeat("*", len(access.SyncPassword))
+		config.Access = &access
+	}
 	if config.SshPassword != "" {
 		config.SshPassword = strings.Repeat("*", len(config.SshPassword))
 	}
@@ -446,6 +452,8 @@ func (config *CKManClickHouseConfig) Pack() {
 }
 
 func (config *CKManClickHouseConfig) UnPack(conf CKManClickHouseConfig) {
+	// Access is managed by the standby service only; edits never change it.
+	config.Access = conf.Access
 	reg := regexp.MustCompile(`^\*{1,}$`)
 	if reg.MatchString(config.Password) {
 		config.Password = conf.Password
@@ -564,6 +572,7 @@ func (config *CKManClickHouseConfig) SingleNodeConfig(host string) *CKManClickHo
 		Secure:   config.Secure,
 		User:     config.User,
 		Password: config.Password,
+		Access:   config.Access, // standby: connect as the sync user
 	}
 }
 
@@ -580,6 +589,10 @@ func (config *CKManClickHouseConfig) GetConnOption(opts ...CkOption) ConnetOptio
 	opt.InsecureSkipVerify = true // hard code
 	opt.User = config.User
 	opt.Password = config.Password
+	if config.Access != nil && config.Access.SyncUser != "" {
+		opt.User = config.Access.SyncUser
+		opt.Password = config.Access.SyncPassword
+	}
 	opt.MaxRead = 3600
 	for _, o := range opts {
 		o(&opt)

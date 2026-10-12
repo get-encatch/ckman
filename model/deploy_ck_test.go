@@ -238,6 +238,7 @@ func TestSingleNodeConfig_FieldClassification(t *testing.T) {
 		"Secure":   true,
 		"User":     true,
 		"Password": true,
+		"Access":   true, // standby clusters connect as the sync user
 	}
 	excluded := map[string]bool{
 		"Comment":          true,

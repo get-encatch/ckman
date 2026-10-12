@@ -331,16 +331,25 @@ func Promote(primary string, finalSync bool) (string, error) {
 	if !sb.PromotedAt.IsZero() {
 		return "", errors.New("already promoted")
 	}
-	note := ""
-	if sb.Mode == model.StandbyModeStorage && finalSync {
-		if err := syncOnce(sb); err != nil {
-			note = "final sync failed: " + err.Error() + "; the standby has data as of the last successful sync"
-		} else {
-			sb.LastSuccess = time.Now()
-			note = "final sync done"
+	var notes []string
+	if sb.Mode == model.StandbyModeStorage {
+		// fence first so no write lands on the primary after the final sync
+		fence(sb) // retried until it works; the status shows it
+		if finalSync {
+			if err := syncOnce(sb); err != nil {
+				notes = append(notes, "final sync failed: "+err.Error()+"; the standby has data as of the last successful sync")
+			} else {
+				sb.LastSuccess = time.Now()
+				notes = append(notes, "final sync done")
+			}
+		}
+		if err := setAccess(sb.Cluster, false); err != nil {
+			_ = put(sb)
+			return "", errors.Wrap(err, "make the standby writable")
 		}
 	}
 	sb.PromotedAt, sb.Paused, sb.State = time.Now(), true, "promoted"
+	note := strings.Join(notes, "; ")
 	sb.StateMessage = note
 	return note, put(sb)
 }
@@ -369,6 +378,7 @@ func Remove(primary string, purge bool) error {
 
 type Status struct {
 	*model.Standby
+	Role        string    `json:"role"` // the asked cluster is the record's "primary" or its "standby"
 	IntervalMin int       `json:"effective_interval_min"`
 	NextSync    time.Time `json:"next_sync,omitempty"`
 	LagSeconds  int64     `json:"lag_seconds"` // how far behind the standby is (-1 = never synced)
@@ -380,11 +390,24 @@ type Status struct {
 }
 
 func GetStatus(primary string) (*Status, error) {
+	role := "primary"
 	sb, err := Get(primary)
 	if err != nil {
-		return nil, err
+		// the cluster may be the standby side of another record
+		all, lerr := List()
+		if lerr != nil {
+			return nil, err
+		}
+		for _, x := range all {
+			if x.Mode == model.StandbyModeStorage && x.Cluster == primary {
+				sb, role = x, "standby"
+			}
+		}
+		if role != "standby" {
+			return nil, err
+		}
 	}
-	st := &Status{Standby: sb, IntervalMin: int(Interval(sb) / time.Minute), LagSeconds: -1}
+	st := &Status{Standby: sb, Role: role, IntervalMin: int(Interval(sb) / time.Minute), LagSeconds: -1}
 	switch sb.Mode {
 	case model.StandbyModeStorage:
 		if !sb.LastSuccess.IsZero() {
@@ -447,7 +470,12 @@ func runSync(primary string) {
 	sb.LastStart, sb.State = time.Now(), "syncing"
 	_ = put(sb)
 	started := sb.LastStart
-	err = syncOnce(sb)
+	err = ensureStandbyAccess(sb)
+	if err != nil {
+		err = errors.Wrap(err, "make the standby read-only")
+	} else {
+		err = syncOnce(sb)
+	}
 	sb.LastEnd = time.Now()
 	sb.Syncs++
 	if err != nil {
@@ -469,6 +497,7 @@ func tick() {
 	if err != nil {
 		return
 	}
+	retryFences(all)
 	for _, sb := range all {
 		if sb.Mode != model.StandbyModeStorage || sb.Paused || !sb.PromotedAt.IsZero() {
 			continue

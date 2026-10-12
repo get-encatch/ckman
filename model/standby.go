@@ -47,7 +47,17 @@ type Standby struct {
 	Syncs        int                      `json:"syncs"`
 	ChainID      string                   `json:"chain_id,omitempty"` // current backup chain in the bucket
 	ChainRuns    int                      `json:"chain_runs"`
-	Tables       map[string]*StandbyTable `json:"tables,omitempty"` // "db.table"
+	Tables       map[string]*StandbyTable `json:"tables,omitempty"`       // "db.table"
+	TableUUIDs   map[string]string        `json:"table_uuids,omitempty"`  // primary table UUID -> "db.table", to follow renames
+	SchemaNotes  []string                 `json:"schema_notes,omitempty"` // schema differences the last sync left as they are
+
+	// lifecycle
+	Fenced     bool      `json:"fenced"`                // promoted: the old primary is read-only
+	FenceError string    `json:"fence_error,omitempty"` // why fencing hasn't worked yet (retried)
+	FenceTried time.Time `json:"fence_tried,omitempty"`
+	Previous   string    `json:"previous,omitempty"`    // after a rejoin or switchover: the cluster that was primary
+	ReversedAt time.Time `json:"reversed_at,omitempty"` // when the roles were last swapped
+	Snapshot   string    `json:"snapshot,omitempty"`    // rejoin: the old primary's safety backup in the bucket
 }
 
 // StandbyTable is the synced state of one table: per shard, the fingerprint

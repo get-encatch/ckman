@@ -109,6 +109,14 @@ function ClusterLayout() {
               </h1>
               <ClusterHealth status={status.data?.status} />
               {!deployed && <Badge variant="secondary">Imported</Badge>}
+              {c?.access?.readOnly && (
+                <Badge
+                  variant="outline"
+                  title="Apps can read but not write; ckman keeps it in sync"
+                >
+                  Read-only
+                </Badge>
+              )}
               {c?.docker && (
                 <Badge variant="secondary">
                   Containers · port {c.docker.ports.tcp}
