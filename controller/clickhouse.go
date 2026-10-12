@@ -1522,7 +1522,7 @@ func (controller *ClickHouseController) DestroyCluster(c *gin.Context) {
 	}
 
 	d := deploy.NewCkDeploy(conf)
-	d.Packages = deploy.BuildPackages(conf.Version, conf.PkgType, conf.Cwd)
+	d.Packages = deploy.RemovalPackages(conf.Version, conf.PkgType, conf.Cwd)
 	taskId, err := deploy.CreateNewTask(clusterName, model.TaskTypeCKDestory, d)
 	if err != nil {
 		controller.wrapfunc(c, model.E_DATA_INSERT_FAILED, err)
@@ -1972,7 +1972,7 @@ SETTINGS skip_unavailable_shards = 1`
 	}
 
 	d := deploy.NewCkDeploy(conf)
-	d.Packages = deploy.BuildPackages(conf.Version, conf.PkgType, conf.Cwd)
+	d.Packages = deploy.RemovalPackages(conf.Version, conf.PkgType, conf.Cwd)
 	d.Conf.Hosts = []string{ip}
 
 	taskId, err := deploy.CreateNewTask(clusterName, model.TaskTypeCKDeleteNode, d)

@@ -953,6 +953,17 @@ func ClearLogicCluster(cluster, logic string, reconf bool) error {
 	return nil
 }
 
+// RemovalPackages is BuildPackages for stop, uninstall and destroy: they only
+// need the install folder, so they work even when the package files aren't
+// loaded (or were deleted from ckman).
+func RemovalPackages(version, pkgType, cwd string) Packages {
+	p := BuildPackages(version, pkgType, cwd)
+	if p.Cwd == "" {
+		p.Cwd = cwd
+	}
+	return p
+}
+
 func BuildPackages(version, pkgType, cwd string) Packages {
 	if pkgType == "" {
 		pkgType = model.PkgTypeDefault
