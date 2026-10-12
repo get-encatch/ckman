@@ -53,11 +53,18 @@ func DeployCkCluster(ctx context.Context, task *model.Task, d deploy.CKDeploy) e
 	}
 
 	deploy.SetNodeStatus(task, model.NodeStatusCheck, model.ALL_NODES_DEFAULT)
-	if err := d.Check(30); err != nil {
-		//return errors.Wrapf(err, "[%s]", model.NodeStatusCheck.EN)
-		deploy.SetTaskStatus(task, model.TaskStatusFailed, err.Error())
+	// busy machines can take a while to start a server: wait up to 2 minutes;
+	// past that the cluster is still saved, flagged for a look
+	if err := d.Check(startCheckTimeout); err != nil {
+		deploy.SetTaskStatus(task, model.TaskStatusFailed, notAnswering("ClickHouse", err))
 	}
 	return nil
+}
+
+const startCheckTimeout = 120 // seconds
+
+func notAnswering(what string, err error) string {
+	return fmt.Sprintf("%s didn't answer within %d s after starting; the cluster was saved anyway: check it on its Overview (%v)", what, startCheckTimeout, err)
 }
 
 func DestroyCkCluster(ctx context.Context, task *model.Task, d deploy.CKDeploy, conf *model.CKManClickHouseConfig) error {

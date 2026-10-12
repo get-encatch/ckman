@@ -34,6 +34,12 @@ func CheckNewNodes(conf *model.CKManClickHouseConfig, ips []string, force bool) 
 		}
 		d := conf.Docker
 		ports := []int{d.Ports.TCP, d.Ports.HTTP, d.Ports.Interserver, d.Ports.Prometheus}
+		// a leftover server of this cluster (an earlier add that failed) holds
+		// these ports; installing replaces it
+		leftover, _ := fleet.Run(m, "docker ps -aq --filter name=^/"+model.ContainerName(conf.Cluster, "clickhouse")+"$")
+		if strings.TrimSpace(leftover) != "" {
+			ports = nil
+		}
 		if busy := busyPorts(m, ports); len(busy) > 0 {
 			problems = append(problems, fmt.Sprintf("%s already uses port %s", m.Name, joinInts(busy)))
 		}

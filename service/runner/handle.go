@@ -61,11 +61,16 @@ func UnmarshalConfig(config interface{}, v interface{}) error {
 	return nil
 }
 
-func CKDeployHandle(ctx context.Context, task *model.Task) error {
+func CKDeployHandle(ctx context.Context, task *model.Task) (err error) {
 	var d deploy.CKDeploy
 	if err := UnmarshalConfig(task.DeployConfig, &d); err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			cleanupFailedCreate(d)
+		}
+	}()
 
 	if d.Conf.KeeperWithStanalone() {
 		task.TaskType = model.TaskTypeKeeperDeploy
@@ -446,4 +451,23 @@ func addToLogicCluster(tx repository.PersistentMgr, conf *model.CKManClickHouseC
 		return nil
 	}
 	return tx.UpdateLogicCluster(*conf.LogicCluster, append(logics, conf.Cluster))
+}
+
+// cleanupFailedCreate removes the containers a failed (or stopped) fleet
+// create started, so creating the cluster again finds its ports free. It
+// never touches a cluster that exists: the name may have been taken since.
+func cleanupFailedCreate(d deploy.CKDeploy) {
+	if !d.Conf.IsDocker() || repository.Ps.ClusterExists(d.Conf.Cluster) {
+		return
+	}
+	if err := d.Uninstall(); err != nil {
+		log.Logger.Warnf("[%s] remove the containers of the failed create: %v", d.Conf.Cluster, err)
+	}
+	if d.Conf.KeeperWithStanalone() {
+		kd := deploy.NewKeeperDeploy(*d.Conf, d.Packages)
+		if err := kd.Uninstall(); err != nil {
+			log.Logger.Warnf("[%s] remove the Keepers of the failed create: %v", d.Conf.Cluster, err)
+		}
+	}
+	log.Logger.Infof("[%s] removed the containers of the failed create", d.Conf.Cluster)
 }

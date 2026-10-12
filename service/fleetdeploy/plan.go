@@ -4,6 +4,7 @@
 package fleetdeploy
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"regexp"
@@ -80,6 +81,8 @@ type PlanMachine struct {
 	Disk      uint64   `json:"disk"`
 	DiskTotal uint64   `json:"disk_total"`
 }
+
+var createMu sync.Mutex
 
 var clusterNameRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
@@ -319,6 +322,9 @@ func MakePlan(req ClusterRequest) (Plan, map[string]*placed) {
 // Create checks the plan and starts the deploy task. It returns the task ID,
 // or the plan when it has errors.
 func Create(req ClusterRequest) (string, Plan, error) {
+	// one create at a time picks a port block and starts its task
+	createMu.Lock()
+	defer createMu.Unlock()
 	p, use := MakePlan(req)
 	if len(p.Errors) > 0 {
 		return "", p, errors.New(strings.Join(p.Errors, "; "))
@@ -407,6 +413,7 @@ func buildConfig(req ClusterRequest, p Plan, use map[string]*placed) (model.CKMa
 }
 
 // freePortSlot is the lowest port block no Docker cluster uses.
+// Creates still running count too: their cluster is only saved at the end.
 func freePortSlot() (int, error) {
 	clusters, err := repository.Ps.GetAllClusters()
 	if err != nil {
@@ -416,6 +423,24 @@ func freePortSlot() (int, error) {
 	for _, c := range clusters {
 		if c.Docker != nil {
 			used[c.Docker.PortSlot] = true
+		}
+	}
+	tasks, err := repository.Ps.GetAllTasks()
+	if err != nil {
+		return 0, errors.Wrap(err, "list tasks")
+	}
+	for _, t := range tasks {
+		// any type: a create runs as keeper.deploy while it starts its Keepers
+		if t.Status != model.TaskStatusWaiting && t.Status != model.TaskStatusRunning {
+			continue
+		}
+		var d struct {
+			Conf struct {
+				Docker *model.DockerConf
+			}
+		}
+		if raw, err := json.Marshal(t.DeployConfig); err == nil && json.Unmarshal(raw, &d) == nil && d.Conf.Docker != nil {
+			used[d.Conf.Docker.PortSlot] = true
 		}
 	}
 	for slot := 0; slot < 2000; slot++ {

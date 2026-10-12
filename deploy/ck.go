@@ -367,15 +367,24 @@ func (d *CKDeploy) Config() error {
 	d.Conf.Normalize()
 	confFiles := make([]string, 0)
 
+	// metrika.xml and custom.xml keep their names on the servers, so each
+	// push generates them in a folder of its own: a shared path let two
+	// clusters configured at once upload each other's files
+	confDir, err := os.MkdirTemp(path.Join(config.GetWorkDirectory(), "package"), "conf-")
+	if err != nil {
+		return errors.Wrap(err, "config folder")
+	}
+	defer os.RemoveAll(confDir)
+
 	if d.Conf.LogicCluster == nil {
-		metrika, err := ckconfig.GenerateMetrikaXML(path.Join(config.GetWorkDirectory(), "package", "metrika.xml"), d.Conf)
+		metrika, err := ckconfig.GenerateMetrikaXML(path.Join(confDir, "metrika.xml"), d.Conf)
 		if err != nil {
 			return err
 		}
 		confFiles = append(confFiles, metrika)
 	}
 
-	custom, err := ckconfig.GenerateCustomXML(path.Join(config.GetWorkDirectory(), "package", "custom.xml"), d.Conf, d.Ext)
+	custom, err := ckconfig.GenerateCustomXML(path.Join(confDir, "custom.xml"), d.Conf, d.Ext)
 	if err != nil {
 		return err
 	}

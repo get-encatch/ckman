@@ -3,6 +3,7 @@ package common
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
@@ -239,22 +240,27 @@ func ScpUploadFile(localFile, remoteFile string, opts SshOptions) error {
 	}
 	defer client.Close()
 	defer sshClient.Close()
-	// delete remote file first, beacuse maybe the remote file exists and created by root
-	cmd := fmt.Sprintf("rm -rf %s", path.Join(TmpWorkDirectory, path.Base(remoteFile)))
-	_, err = RemoteExecute(opts, cmd)
-	if err != nil {
-		return err
-	}
-
-	err = ScpUpload(client, localFile, path.Join(TmpWorkDirectory, path.Base(remoteFile)))
-	if err != nil {
-		return err
-	}
-
+	// A file going elsewhere is staged under a name of its own: two uploads
+	// of the same file name to one host at once (custom.xml of two clusters)
+	// must not swap contents, and no cleanup pattern may catch it mid-flight.
+	staged := remoteFile
 	if path.Dir(remoteFile) != TmpWorkDirectory {
-		cmd = fmt.Sprintf("cp %s %s", path.Join(TmpWorkDirectory, path.Base(remoteFile)), remoteFile)
-		_, err = RemoteExecute(opts, cmd)
-		if err != nil {
+		suffix := make([]byte, 6)
+		_, _ = rand.Read(suffix)
+		staged = path.Join(TmpWorkDirectory, fmt.Sprintf("ckman-upload-%x-%s", suffix, path.Base(remoteFile)))
+	} else {
+		// delete remote file first, beacuse maybe the remote file exists and created by root
+		if _, err = RemoteExecute(opts, fmt.Sprintf("rm -rf %s", staged)); err != nil {
+			return err
+		}
+	}
+
+	if err = ScpUpload(client, localFile, staged); err != nil {
+		return err
+	}
+
+	if staged != remoteFile {
+		if _, err = RemoteExecute(opts, fmt.Sprintf("cp %s %s; rm -f %s", staged, remoteFile, staged)); err != nil {
 			return err
 		}
 	}
