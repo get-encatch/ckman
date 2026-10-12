@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/housepower/ckman/common"
+	"github.com/housepower/ckman/deploy"
 	"github.com/housepower/ckman/model"
 	"github.com/housepower/ckman/repository"
 	"github.com/housepower/ckman/service/fleet"
@@ -186,6 +187,25 @@ func Resize(cluster string, r Resources) ([]string, error) {
 	conf.Docker = &next
 	if err := repository.Ps.UpdateCluster(conf); err != nil {
 		return done, err
+	}
+	// ClickHouse sizes its memory limits and pools from its container: give
+	// the resized servers configs for their new size (users config reloads
+	// live; pool sizes apply at the next restart)
+	var resized []string
+	for _, c := range changes {
+		if c.role == "clickhouse" {
+			resized = append(resized, c.ip)
+		}
+	}
+	if len(resized) > 0 {
+		d := deploy.NewCkDeploy(conf)
+		d.Conf.Hosts = resized
+		if err := d.Init(); err != nil {
+			return done, errors.Wrap(err, "containers resized; refresh ClickHouse settings")
+		}
+		if err := d.Config(); err != nil {
+			return done, errors.Wrap(err, "containers resized; refresh ClickHouse settings")
+		}
 	}
 	for _, ip := range append(append([]string{}, conf.Hosts...), conf.KeeperConf.KeeperNodes...) {
 		if m, ok := fleet.MachineByIP(ip); ok {
