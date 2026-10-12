@@ -91,7 +91,7 @@ func raft_configuration(conf *model.KeeperConf) []map[string]interface{} {
 	for idx, node := range conf.KeeperNodes {
 		output := make(map[string]interface{})
 		output["server"] = map[string]interface{}{
-			"id":       idx + 1,
+			"id":       conf.ServerID(idx),
 			"hostname": node,
 			"port":     conf.RaftPort,
 		}

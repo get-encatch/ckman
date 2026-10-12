@@ -674,9 +674,15 @@ function AfterFailover({
       done: keepers >= 3,
       title: "Run 3 Keepers",
       body:
-        keepers >= 3
-          ? `${keepers} Keepers.`
-          : `${keepers} Keeper${keepers === 1 ? "" : "s"}: if it stops, ${active} stops taking writes. Add Keepers on machines you choose.`,
+        keepers >= 3 ? (
+          `${keepers} Keepers.`
+        ) : (
+          <>
+            {keepers} Keeper{keepers === 1 ? "" : "s"}: if it stops, {active}{" "}
+            stops taking writes. {nodes("Add Keepers on the Nodes page")} on
+            machines you choose.
+          </>
+        ),
     },
     {
       title: "Check sizes",

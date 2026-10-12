@@ -165,3 +165,19 @@ func (fc *FleetController) ResizeCluster(c *gin.Context) {
 	}
 	fc.wrapfunc(c, model.E_SUCCESS, gin.H{"resized": done})
 }
+
+// ScaleKeepers: POST /fleet/cluster/:cluster/keepers adds Keepers on chosen
+// machines and removes others (an odd number must remain); runs as a task.
+func (fc *FleetController) ScaleKeepers(c *gin.Context) {
+	var req fleetdeploy.KeeperChange
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fc.wrapfunc(c, model.E_INVALID_PARAMS, err)
+		return
+	}
+	taskID, err := fleetdeploy.ScaleKeepers(c.Param("cluster"), req)
+	if err != nil {
+		fc.wrapfunc(c, model.E_DATA_CHECK_FAILED, err)
+		return
+	}
+	fc.wrapfunc(c, model.E_SUCCESS, gin.H{"task_id": taskID})
+}

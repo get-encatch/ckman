@@ -200,6 +200,7 @@ func InitRouterV1(groupV1 *gin.RouterGroup, config *config.CKManConfig, signal c
 	groupV1.POST("/fleet/clusters/plan", fleetController.PlanCluster)
 	groupV1.POST("/fleet/clusters", fleetController.CreateCluster)
 	groupV1.PUT("/fleet/cluster/:cluster/resources", fleetController.ResizeCluster)
+	groupV1.POST("/fleet/cluster/:cluster/keepers", fleetController.ScaleKeepers)
 	groupV1.GET("/fleet/settings", fleetController.GetFleetSettings)
 	groupV1.PUT("/fleet/settings", fleetController.SaveFleetSettings)
 	groupV1.POST("/fleet/standby", fleetController.CreateStandby)
