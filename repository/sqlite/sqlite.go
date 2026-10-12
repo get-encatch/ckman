@@ -1144,3 +1144,13 @@ func (sp *SQLitePersistent) ListClusterDrafts() ([][]byte, error) {
 func (sp *SQLitePersistent) DeleteClusterDraft(name string) error {
 	return wrapError(sp.Client.Unscoped().Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).Delete(&TblCluster{}).Error)
 }
+
+// InTx runs fn in its own transaction on a copy bound to it (see
+// repository.PersistentBase).
+func (sp *SQLitePersistent) InTx(fn func(tx repository.PersistentMgr) error) error {
+	return sp.ParentDB.Transaction(func(tx *gorm.DB) error {
+		cp := *sp
+		cp.Client, cp.ParentDB = tx, tx
+		return fn(&cp)
+	})
+}

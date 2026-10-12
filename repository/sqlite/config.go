@@ -61,6 +61,9 @@ func BuildDialector(cfgMap map[string]interface{}) (gorm.Dialector, error) {
 		return nil, errors.Wrap(err, "unmarshal cfgMap")
 	}
 	cfg.Normalize()
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)", cfg.DBPath())
+	// _txlock=immediate: a transaction takes the write lock when it starts, so
+	// one that reads before writing can't fail with SQLITE_BUSY when another
+	// writer commits first (busy_timeout doesn't cover that upgrade)
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)&_txlock=immediate", cfg.DBPath())
 	return sqlitedriver.Open(dsn), nil
 }

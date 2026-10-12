@@ -1262,3 +1262,13 @@ func (mp *PostgresPersistent) ListClusterDrafts() ([][]byte, error) {
 func (mp *PostgresPersistent) DeleteClusterDraft(name string) error {
 	return wrapError(mp.Client.Unscoped().Where("cluster_name = ? AND status = ?", name, repository.ClusterStatusDraft).Delete(&TblCluster{}).Error)
 }
+
+// InTx runs fn in its own transaction on a copy bound to it (see
+// repository.PersistentBase).
+func (mp *PostgresPersistent) InTx(fn func(tx repository.PersistentMgr) error) error {
+	return mp.ParentDB.Transaction(func(tx *gorm.DB) error {
+		cp := *mp
+		cp.Client, cp.ParentDB = tx, tx
+		return fn(&cp)
+	})
+}

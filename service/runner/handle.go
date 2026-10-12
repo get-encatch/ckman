@@ -96,37 +96,18 @@ func CKDeployHandle(ctx context.Context, task *model.Task) error {
 			}
 		}
 	}
-	if err := repository.Ps.Begin(); err != nil {
-		return err
-	}
 	if d.Conf.AuthenticateType != model.SshPasswordSave {
 		d.Conf.SshPassword = ""
 	}
 	d.Conf.Watch(model.ALL_NODES_DEFAULT)
-	if err := repository.Ps.CreateCluster(*d.Conf); err != nil {
-		_ = repository.Ps.Rollback()
+	if err := repository.Ps.InTx(func(tx repository.PersistentMgr) error {
+		if err := tx.CreateCluster(*d.Conf); err != nil {
+			return err
+		}
+		return addToLogicCluster(tx, d.Conf)
+	}); err != nil {
 		return errors.Wrapf(err, "[%s]", model.NodeStatusStore.EN)
 	}
-	if d.Conf.LogicCluster != nil {
-		logics, err := repository.Ps.GetLogicClusterbyName(*d.Conf.LogicCluster)
-		if err != nil {
-			if errors.Is(err, repository.ErrRecordNotFound) {
-				if !common.ArraySearch(d.Conf.Cluster, logics) {
-					logics = append(logics, d.Conf.Cluster)
-				}
-				_ = repository.Ps.CreateLogicCluster(*d.Conf.LogicCluster, logics)
-			} else {
-				_ = repository.Ps.Rollback()
-				return errors.Wrapf(err, "[%s]", model.NodeStatusStore.EN)
-			}
-		} else {
-			if !common.ArraySearch(d.Conf.Cluster, logics) {
-				logics = append(logics, d.Conf.Cluster)
-			}
-			_ = repository.Ps.UpdateLogicCluster(*d.Conf.LogicCluster, logics)
-		}
-	}
-	_ = repository.Ps.Commit()
 	deploy.SetNodeStatus(task, model.NodeStatusDone, model.ALL_NODES_DEFAULT)
 	return nil
 }
@@ -159,42 +140,41 @@ func CKDestoryHandle(ctx context.Context, task *model.Task) error {
 	}
 
 	deploy.SetNodeStatus(task, model.NodeStatusStore, model.ALL_NODES_DEFAULT)
-	if err = repository.Ps.Begin(); err != nil {
-		return err
+	var others []string
+	err = repository.Ps.InTx(func(tx repository.PersistentMgr) error {
+		if conf.LogicCluster != nil {
+			var err error
+			if others, err = deploy.RemoveFromLogicCluster(tx, conf.Cluster, *conf.LogicCluster); err != nil {
+				return err
+			}
+		}
+		//TODO [L] clear task record and query history
+		if historys, err := tx.GetQueryHistoryByCluster(conf.Cluster); err == nil {
+			for _, history := range historys {
+				_ = tx.DeleteQueryHistory(history.CheckSum)
+			}
+		}
+		if tasks, err := tx.GetAllTasks(); err == nil {
+			for _, t := range tasks {
+				//do not delete running task when destory cluster
+				if t.ClusterName != conf.Cluster || t.Status == model.TaskStatusWaiting || t.Status == model.TaskStatusRunning || t.TaskId == task.TaskId {
+					continue
+				}
+				_ = tx.DeleteTask(t.TaskId)
+			}
+		}
+		return tx.DeleteCluster(conf.Cluster)
+	})
+	if err != nil {
+		return errors.Wrapf(err, "[%s]", model.NodeStatusStore.EN)
 	}
-	if conf.LogicCluster != nil {
-		if err = deploy.ClearLogicCluster(conf.Cluster, *conf.LogicCluster, true); err != nil {
-			_ = repository.Ps.Rollback()
+	// SSH work stays out of the transaction: the logic cluster's other
+	// clusters drop this one from their configs
+	for _, other := range others {
+		if err := deploy.ConfigLogicOtherCluster(other); err != nil {
 			return errors.Wrapf(err, "[%s]", model.NodeStatusStore.EN)
 		}
 	}
-
-	//TODO [L] clear task record and query history
-	historys, err := repository.Ps.GetQueryHistoryByCluster(conf.Cluster)
-	if err == nil {
-		for _, history := range historys {
-			_ = repository.Ps.DeleteQueryHistory(history.CheckSum)
-		}
-	}
-
-	tasks, err := repository.Ps.GetAllTasks()
-	if err == nil {
-		for _, t := range tasks {
-			if t.ClusterName == conf.Cluster {
-				//do not delete running task when destory cluster
-				if t.Status == model.TaskStatusWaiting || t.Status == model.TaskStatusRunning || t.TaskId == task.TaskId {
-					continue
-				}
-				_ = repository.Ps.DeleteTask(t.TaskId)
-			}
-		}
-	}
-
-	if err = repository.Ps.DeleteCluster(conf.Cluster); err != nil {
-		_ = repository.Ps.Rollback()
-		return errors.Wrapf(err, "[%s]", model.NodeStatusStore.EN)
-	}
-	_ = repository.Ps.Commit()
 
 	deploy.SetNodeStatus(task, model.NodeStatusDone, model.ALL_NODES_DEFAULT)
 	return nil
@@ -364,34 +344,17 @@ func CKSettingHandle(ctx context.Context, task *model.Task) error {
 		return err
 	}
 
-	if err := repository.Ps.Begin(); err != nil {
-		return errors.Wrapf(err, "[%s]", model.NodeStatusStore.EN)
-	}
 	if d.Conf.AuthenticateType != model.SshPasswordSave {
 		d.Conf.SshPassword = ""
 	}
-	if err := repository.Ps.UpdateCluster(*d.Conf); err != nil {
-		_ = repository.Ps.Rollback()
+	if err := repository.Ps.InTx(func(tx repository.PersistentMgr) error {
+		if err := tx.UpdateCluster(*d.Conf); err != nil {
+			return err
+		}
+		return addToLogicCluster(tx, d.Conf)
+	}); err != nil {
 		return errors.Wrapf(err, "[%s]", model.NodeStatusStore.EN)
 	}
-	if d.Conf.LogicCluster != nil {
-		logics, err := repository.Ps.GetLogicClusterbyName(*d.Conf.LogicCluster)
-		if err != nil {
-			if errors.Is(err, repository.ErrRecordNotFound) {
-				logics = append(logics, d.Conf.Cluster)
-				_ = repository.Ps.CreateLogicCluster(*d.Conf.LogicCluster, logics)
-			} else {
-				_ = repository.Ps.Rollback()
-				return errors.Wrapf(err, "[%s]", model.NodeStatusStore.EN)
-			}
-		} else {
-			if !common.ArraySearch(d.Conf.Cluster, logics) {
-				logics = append(logics, d.Conf.Cluster)
-			}
-			_ = repository.Ps.UpdateLogicCluster(*d.Conf.LogicCluster, logics)
-		}
-	}
-	_ = repository.Ps.Commit()
 	deploy.SetNodeStatus(task, model.NodeStatusDone, model.ALL_NODES_DEFAULT)
 	return nil
 }
@@ -465,4 +428,22 @@ func CKRebalanceHandle(ctx context.Context, task *model.Task) error {
 	}
 	deploy.SetNodeStatus(task, model.NodeStatusDone, model.ALL_NODES_DEFAULT)
 	return nil
+}
+
+// addToLogicCluster records conf in its logic cluster, if it has one.
+func addToLogicCluster(tx repository.PersistentMgr, conf *model.CKManClickHouseConfig) error {
+	if conf.LogicCluster == nil {
+		return nil
+	}
+	logics, err := tx.GetLogicClusterbyName(*conf.LogicCluster)
+	if err != nil {
+		if !errors.Is(err, repository.ErrRecordNotFound) {
+			return err
+		}
+		return tx.CreateLogicCluster(*conf.LogicCluster, []string{conf.Cluster})
+	}
+	if common.ArraySearch(conf.Cluster, logics) {
+		return nil
+	}
+	return tx.UpdateLogicCluster(*conf.LogicCluster, append(logics, conf.Cluster))
 }

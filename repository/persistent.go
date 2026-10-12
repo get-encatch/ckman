@@ -24,9 +24,11 @@ type PersistentFactory interface {
 type PersistentBase interface {
 	UnmarshalConfig(configMap map[string]interface{}) interface{}
 	Init(config interface{}) error
-	Begin() error
-	Commit() error
-	Rollback() error
+	// InTx runs fn in a transaction of its own. fn gets a copy of the
+	// persistence bound to that transaction; the shared connection is never
+	// swapped, so concurrent callers neither see nor end the transaction.
+	// Keep fn to database work: SQLite has one writer at a time.
+	InTx(fn func(tx PersistentMgr) error) error
 }
 
 type PersistentClusterService interface {

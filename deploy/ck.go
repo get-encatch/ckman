@@ -922,35 +922,22 @@ func GenLogicMetrika(d *CKDeploy) (string, []*CKDeploy) {
 	return ckconfig.GenLogicMetrika(*d.Conf.LogicCluster, clusters, secret), deploys
 }
 
-func ClearLogicCluster(cluster, logic string, reconf bool) error {
+// RemoveFromLogicCluster takes cluster out of logic cluster logic in ps (a
+// transaction or repository.Ps) and returns the clusters left in it, whose
+// configs then need ConfigLogicOtherCluster.
+func RemoveFromLogicCluster(ps repository.PersistentMgr, cluster, logic string) ([]string, error) {
 	var newPhysics []string
-	physics, err := repository.Ps.GetLogicClusterbyName(logic)
-	if err == nil {
-		// need delete logic cluster and reconf other cluster
+	if physics, err := ps.GetLogicClusterbyName(logic); err == nil {
 		for _, physic := range physics {
-			if physic == cluster {
-				continue
+			if physic != cluster {
+				newPhysics = append(newPhysics, physic)
 			}
-			newPhysics = append(newPhysics, physic)
 		}
 	}
 	if len(newPhysics) == 0 {
-		if err = repository.Ps.DeleteLogicCluster(logic); err != nil {
-			return err
-		}
-	} else {
-		if err = repository.Ps.UpdateLogicCluster(logic, newPhysics); err != nil {
-			return err
-		}
-		if reconf {
-			for _, newLogic := range newPhysics {
-				if err = ConfigLogicOtherCluster(newLogic); err != nil {
-					return err
-				}
-			}
-		}
+		return nil, ps.DeleteLogicCluster(logic)
 	}
-	return nil
+	return newPhysics, ps.UpdateLogicCluster(logic, newPhysics)
 }
 
 // RemovalPackages is BuildPackages for stop, uninstall and destroy: they only
