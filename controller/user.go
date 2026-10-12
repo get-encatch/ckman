@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"github.com/housepower/ckman/service/session"
 	"regexp"
 	"time"
 
@@ -10,7 +11,6 @@ import (
 	"github.com/housepower/ckman/config"
 	"github.com/housepower/ckman/model"
 	"github.com/housepower/ckman/repository"
-	"github.com/patrickmn/go-cache"
 	"github.com/pkg/errors"
 )
 
@@ -36,8 +36,6 @@ func isReservedName(name string) bool {
 func validPolicyForCreate(p string) bool {
 	return p == common.GUEST || p == common.ORDINARY
 }
-
-var TokenCache *cache.Cache
 
 type UserController struct {
 	Controller
@@ -103,8 +101,10 @@ func (controller *UserController) Login(c *gin.Context) {
 		Policy:   user.Policy,
 		Enabled:  user.Enabled,
 	}
-	TokenCache.SetDefault(token,
-		time.Now().Add(time.Second*time.Duration(controller.config.Server.SessionTimeout)).Unix())
+	if err := session.Create(token, user.Username, time.Second*time.Duration(controller.config.Server.SessionTimeout)); err != nil {
+		controller.wrapfunc(c, model.E_CREAT_TOKEN_FAIL, err)
+		return
+	}
 
 	controller.wrapfunc(c, model.E_SUCCESS, rsp)
 }
@@ -256,6 +256,9 @@ func (controller *UserController) Update(c *gin.Context) {
 		controller.wrapfunc(c, model.E_DATA_UPDATE_FAILED, err)
 		return
 	}
+	if !user.Enabled {
+		revokeTokensFor(username) // a disabled user is logged out everywhere
+	}
 	controller.wrapfunc(c, model.E_SUCCESS, nil)
 }
 
@@ -283,19 +286,9 @@ func (controller *UserController) Delete(c *gin.Context) {
 	controller.wrapfunc(c, model.E_SUCCESS, nil)
 }
 
-// revokeTokensFor walks the in-memory TokenCache and removes entries whose JWT
-// claims.Name equals username. Used after deleting a user account.
+// revokeTokensFor ends every session of username, on all ckman instances.
 func revokeTokensFor(username string) {
-	for token := range TokenCache.Items() {
-		j := common.NewJWT()
-		claims, code := j.ParserToken(token)
-		if code != model.E_SUCCESS {
-			continue
-		}
-		if claims.Name == username {
-			TokenCache.Delete(token)
-		}
-	}
+	session.DeleteUser(username, "")
 }
 
 // @Summary 修改自己的密码
@@ -339,6 +332,8 @@ func (controller *UserController) ChangeMyPassword(c *gin.Context) {
 		controller.wrapfunc(c, model.E_DATA_UPDATE_FAILED, err)
 		return
 	}
+	// other sessions of this user end; this one stays
+	session.DeleteUser(username, c.GetString("token"))
 	controller.wrapfunc(c, model.E_SUCCESS, nil)
 }
 
@@ -376,6 +371,7 @@ func (controller *UserController) ResetPassword(c *gin.Context) {
 		controller.wrapfunc(c, model.E_DATA_UPDATE_FAILED, err)
 		return
 	}
+	revokeTokensFor(username) // the old password's sessions end
 	controller.wrapfunc(c, model.E_SUCCESS, nil)
 }
 
@@ -389,7 +385,7 @@ func (controller *UserController) ResetPassword(c *gin.Context) {
 func (controller *UserController) Logout(c *gin.Context) {
 	if value, exists := c.Get("token"); exists {
 		token := value.(string)
-		TokenCache.Delete(token)
+		session.Delete(token)
 		c.Set("token", "")
 	}
 
