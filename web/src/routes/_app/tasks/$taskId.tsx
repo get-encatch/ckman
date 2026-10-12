@@ -100,6 +100,16 @@ function TaskPage() {
           </div>
         ) : (
           <>
+            {t.Warning && (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+                <p className="font-medium">
+                  {t.Status === "Success"
+                    ? "Finished with a warning"
+                    : "Warning"}
+                </p>
+                <p className="text-muted-foreground">{t.Warning}</p>
+              </div>
+            )}
             {t.Status === "Running" && idleMinutes(t.UpdateTime) >= 15 && (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
                 <p className="font-medium">

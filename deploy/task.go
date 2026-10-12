@@ -130,6 +130,18 @@ func saveTask(task model.Task) error {
 	return err
 }
 
+// SetTaskWarning notes something to look at on a task that still goes on
+// (and can still succeed).
+func SetTaskWarning(task *model.Task, msg string) {
+	if task.Warning != "" {
+		msg = task.Warning + "; " + msg
+	}
+	task.Warning = msg
+	if err := saveTask(*task); err != nil {
+		log.Logger.Errorf("%s save warning: %v", task.TaskId, err)
+	}
+}
+
 func SetTaskStatus(task *model.Task, status int, msg string) error {
 	fresh, err := repository.Ps.GetTaskbyTaskId(task.TaskId)
 	if err == nil && isTerminalStatus(fresh.Status) && fresh.Status != status {

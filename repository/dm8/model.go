@@ -10,7 +10,7 @@ type TblCluster struct {
 	gorm.Model
 	ClusterName   string        `gorm:"index:idx_name,unique"`
 	Configuration dmSchema.Clob `gorm:"size:1024000"`
-	Status        string        `gorm:"column:status;size:16"` // "" or "draft"
+	Status        string        `gorm:"column:STATUS;size:16"` // "" or "draft"; uppercase like every column added later (see below)
 }
 
 type TblLogic struct {

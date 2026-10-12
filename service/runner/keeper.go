@@ -51,7 +51,7 @@ func DeployKeeperCluster(ctx context.Context, task *model.Task, d deploy.CKDeplo
 
 	deploy.SetNodeStatus(task, model.NodeStatusCheck, model.ALL_NODES_DEFAULT)
 	if err := kd.Check(startCheckTimeout); err != nil {
-		deploy.SetTaskStatus(task, model.TaskStatusFailed, notAnswering("Keeper", err))
+		deploy.SetTaskWarning(task, notAnswering("Keeper", err))
 	}
 	deploy.SetNodeStatus(task, model.NodeStatusDone, model.ALL_NODES_DEFAULT)
 	return nil

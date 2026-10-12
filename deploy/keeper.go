@@ -421,6 +421,9 @@ func (d *KeeperDeploy) Start() error {
 				lastError = err
 				return
 			}
+			if strings.HasSuffix(d.Conf.PkgType, common.PkgSuffixTgz) {
+				setAutostart(sshOpts, d.Conf.Cwd, KeeperSvrName, cmd)
+			}
 			log.Logger.Debugf("host %s start done", innerHost)
 		})
 	}
@@ -452,6 +455,9 @@ func (d *KeeperDeploy) Stop() error {
 				Host:             innerHost,
 				NeedSudo:         d.Conf.NeedSudo,
 				AuthenticateType: d.Conf.AuthenticateType,
+			}
+			if strings.HasSuffix(d.Conf.PkgType, common.PkgSuffixTgz) {
+				setAutostart(sshOpts, d.Conf.Cwd, KeeperSvrName, "")
 			}
 			cmd := cmdIns.StopCmd(KeeperSvrName, d.Conf.Cwd, path.Join(d.Conf.KeeperConf.Path, "clickhouse-keeper"))
 			_, err := common.RemoteExecute(sshOpts, cmd)

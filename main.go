@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"syscall"
 	"time"
 
@@ -25,9 +26,9 @@ import (
 	"github.com/housepower/ckman/config"
 	"github.com/housepower/ckman/log"
 	_ "github.com/housepower/ckman/repository/dm8"
-	_ "github.com/housepower/ckman/repository/sqlite"
 	_ "github.com/housepower/ckman/repository/mysql"
 	_ "github.com/housepower/ckman/repository/postgres"
+	_ "github.com/housepower/ckman/repository/sqlite"
 	"github.com/housepower/ckman/server"
 	"github.com/housepower/ckman/service/nacos"
 	"github.com/housepower/ckman/service/zookeeper"
@@ -251,7 +252,30 @@ func writeShutdownSnapshot() error {
 	// 最终落盘名形如 clusters.json.shutdown_snapshot.<ts>.json。
 	snapshotBase := fmt.Sprintf("%s.json.shutdown_snapshot.%s", locCfg.ConfigFile, ts)
 	outPath := filepath.Join(locCfg.ConfigDir, snapshotBase)
-	return dumpjson.DumpFromDB(locCfg.DBPath(), outPath)
+	if err := dumpjson.DumpFromDB(locCfg.DBPath(), outPath); err != nil {
+		return err
+	}
+	pruneShutdownSnapshots(filepath.Join(locCfg.ConfigDir, locCfg.ConfigFile+".json.shutdown_snapshot.*"))
+	return nil
+}
+
+// keepShutdownSnapshots is how many shutdown snapshots stay; one is written
+// on every stop, so without a limit they pile up.
+const keepShutdownSnapshots = 5
+
+// pruneShutdownSnapshots deletes all but the newest snapshots (their names
+// end in a UTC timestamp, so they sort by age).
+func pruneShutdownSnapshots(pattern string) {
+	files, err := filepath.Glob(pattern)
+	if err != nil || len(files) <= keepShutdownSnapshots {
+		return
+	}
+	sort.Strings(files)
+	for _, f := range files[:len(files)-keepShutdownSnapshots] {
+		if err := os.Remove(f); err != nil {
+			log.Logger.Warnf("remove old shutdown snapshot %s: %v", f, err)
+		}
+	}
 }
 
 // func reloadHandler() error {

@@ -343,6 +343,7 @@ export type TaskSummary = {
   Option: I18n
   Status: TaskStatus
   Message: string
+  Warning?: string // succeeded, but something needs a look
   CreateTime: string
   UpdateTime: string
   Duration: string
