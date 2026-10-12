@@ -41,6 +41,7 @@ export type Cluster = {
   sshPort: number
   mode: "deploy" | "import"
   docker?: import("./fleet").DockerConf // runs as containers on fleet machines
+  access?: { readOnly: boolean; syncUser?: string } | null // standby: apps read-only
 }
 
 export const clusterListQuery = () =>

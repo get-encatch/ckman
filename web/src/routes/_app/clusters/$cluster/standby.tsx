@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, Link, useRouteContext } from "@tanstack/react-router"
-import { RefreshCwIcon } from "lucide-react"
+import { CheckIcon, RefreshCwIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { errorMessage } from "@/api/client"
@@ -20,7 +20,7 @@ import {
   type Machine,
   type Standby,
 } from "@/api/fleet"
-import { clusterQuery } from "@/api/queries"
+import { clusterQuery, type Cluster } from "@/api/queries"
 import { connectionsQuery } from "@/api/storage"
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
 import {
@@ -78,7 +78,9 @@ function StandbyPage() {
     )
   return (
     <PageBody className="max-w-4xl">
-      {standby.data ? (
+      {standby.data?.role === "standby" ? (
+        <StandbySide cluster={cluster} sb={standby.data} />
+      ) : standby.data ? (
         <StandbyStatus cluster={cluster} sb={standby.data} isAdmin={isAdmin} />
       ) : isAdmin ? (
         <StandbySetup cluster={cluster} />
@@ -100,6 +102,81 @@ function lagText(seconds: number) {
   return `${(seconds / 3600).toFixed(1)} h behind`
 }
 
+const isSet = (t?: string) => !!t && !t.startsWith("0001")
+
+// StandbySide is the Standby tab of the standby cluster itself: what it is a
+// copy of; everything is managed from the primary's tab.
+function StandbySide({ cluster, sb }: { cluster: string; sb: Standby }) {
+  const promoted = isSet(sb.promoted_at)
+  const link = (
+    <Link
+      to="/clusters/$cluster/standby"
+      params={{ cluster: sb.primary }}
+      className="underline"
+    >
+      {sb.primary}&apos;s Standby tab
+    </Link>
+  )
+  return (
+    <Section
+      title={promoted ? "Active after failover" : `Standby of ${sb.primary}`}
+      description={
+        promoted
+          ? `${cluster} took over from ${sb.primary} ${formatAgo(sb.promoted_at)} and takes writes.`
+          : `${cluster} is a read-only copy of ${sb.primary} in ${sb.zone}: apps can read it but not write. ckman copies ${sb.primary}'s changes every ${sb.effective_interval_min} min.`
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-3">
+        <StatCard
+          label="State"
+          value={
+            <StatusPill
+              tone={
+                promoted
+                  ? "info"
+                  : sb.state === "failed" || sb.overdue
+                    ? "bad"
+                    : sb.state === "ready"
+                      ? "ok"
+                      : "warn"
+              }
+              busy={sb.state === "syncing" || sb.state === "creating"}
+              label={
+                promoted
+                  ? "Active"
+                  : sb.paused
+                    ? "Paused"
+                    : sb.state === "ready"
+                      ? "In sync"
+                      : sb.state === "failed"
+                        ? "Sync failed"
+                        : sb.state === "creating"
+                          ? "Creating"
+                          : "Syncing"
+              }
+            />
+          }
+        />
+        {!promoted && (
+          <StatCard
+            label="Data as of"
+            value={
+              isSet(sb.last_success) ? formatDateTime(sb.last_success) : "—"
+            }
+            hint={lagText(sb.lag_seconds)}
+          />
+        )}
+      </div>
+      <p className="text-sm text-muted-foreground">
+        {promoted
+          ? "The checklist after failover, and bringing the old primary back, are on "
+          : "Syncing, failover and switching roles are on "}
+        {link}.
+      </p>
+    </Section>
+  )
+}
+
 function StandbyStatus({
   cluster,
   sb,
@@ -119,9 +196,16 @@ function StandbyStatus({
   const [finalSync, setFinalSync] = useState(true)
   const [remove, setRemove] = useState(false)
   const [purge, setPurge] = useState(false)
+  const [rejoin, setRejoin] = useState(false)
+  const [switchover, setSwitchover] = useState(false)
   const [busy, setBusy] = useState(false)
   const refresh = () =>
-    queryClient.invalidateQueries({ queryKey: ["cluster", cluster, "standby"] })
+    Promise.all(
+      [cluster, sb.cluster ?? ""].flatMap((c) => [
+        queryClient.invalidateQueries({ queryKey: ["cluster", c, "standby"] }),
+        queryClient.invalidateQueries({ queryKey: ["cluster", c] }),
+      ])
+    )
 
   async function act(action: "sync" | "pause" | "resume") {
     setBusy(true)
@@ -191,6 +275,21 @@ function StandbyStatus({
                   {sb.paused ? "Resume" : "Pause"}
                 </Button>
               )}
+              {storage && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || sb.state !== "ready" || sb.paused}
+                  title={
+                    sb.state !== "ready" || sb.paused
+                      ? "Needs an up-to-date, running standby"
+                      : undefined
+                  }
+                  onClick={() => setSwitchover(true)}
+                >
+                  Switch roles…
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="destructive"
@@ -208,26 +307,39 @@ function StandbyStatus({
               Failed over {formatAgo(sb.promoted_at)}.
             </p>
             <p className="text-muted-foreground">
-              {storage && sb.cluster ? (
-                <>
-                  Point your apps at{" "}
-                  <Link
-                    to="/clusters/$cluster"
-                    params={{ cluster: sb.cluster }}
-                    className="underline"
-                  >
-                    {sb.cluster}
-                  </Link>
-                  {target.data?.docker &&
-                    ` (native port ${target.data.docker.ports.tcp}, HTTP ${target.data.docker.ports.http})`}
-                  . Resize it or add replicas there for full production
-                  capacity. Syncing has stopped.
-                </>
-              ) : (
-                "The standby replicas are already part of the cluster; nothing else changes."
-              )}
+              {storage && sb.cluster
+                ? `${sb.cluster} takes writes now and syncing has stopped.`
+                : "The standby replicas are already part of the cluster; nothing else changes."}
               {sb.state_message ? ` ${sb.state_message}.` : ""}
             </p>
+          </div>
+        )}
+        {promoted && storage && sb.cluster && (
+          <AfterFailover
+            primary={cluster}
+            active={sb.cluster}
+            sb={sb}
+            target={target.data}
+            isAdmin={isAdmin}
+            onRejoin={() => setRejoin(true)}
+          />
+        )}
+        {isSet(sb.reversed_at) && sb.previous && !promoted && (
+          <p className="text-sm text-muted-foreground">
+            Roles swapped {formatAgo(sb.reversed_at)}: {sb.previous} was the
+            primary before.
+            {sb.snapshot &&
+              ` Its data from before the swap is kept in the bucket at ${sb.snapshot}.`}
+          </p>
+        )}
+        {(sb.schema_notes ?? []).length > 0 && !promoted && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            <p className="font-medium">Schema differences left as they are</p>
+            <ul className="list-disc pl-5 text-muted-foreground">
+              {(sb.schema_notes ?? []).map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
           </div>
         )}
         {sb.overdue && !promoted && (
@@ -391,7 +503,7 @@ function StandbyStatus({
           <div className="flex flex-col gap-3">
             <p>
               {storage
-                ? `${sb.cluster} becomes the cluster to use and syncing stops for good. Point your apps at it.`
+                ? `${sb.cluster} starts taking writes and syncing stops. ${cluster} becomes read-only now if it answers, otherwise as soon as it does, so apps can't write to both. Point your apps at ${sb.cluster}.`
                 : "The standby replicas already serve the cluster; this records the failover."}
             </p>
             {storage && (
@@ -413,6 +525,60 @@ function StandbyStatus({
             final_sync: storage && finalSync,
           })
           toast.success(res.note || "Failed over")
+          await refresh()
+        }}
+      />
+      <ConfirmDialog
+        open={switchover}
+        onOpenChange={setSwitchover}
+        title={`Switch roles with ${sb.cluster}?`}
+        description={
+          <div className="flex flex-col gap-3">
+            <p>
+              {cluster} stops taking writes, a last sync copies its latest
+              changes, then {sb.cluster} takes writes and {cluster} becomes its
+              read-only standby. Writes fail for the few seconds this takes;
+              point your apps at {sb.cluster} right after.
+            </p>
+            <p>
+              If the last sync fails nothing changes and {cluster} takes writes
+              again.
+            </p>
+          </div>
+        }
+        typeToConfirm={cluster}
+        confirmLabel="Switch roles"
+        destructive
+        onConfirm={async () => {
+          await standbyAction(cluster, "switchover")
+          toast.success(`${sb.cluster} is the primary now`)
+          await refresh()
+        }}
+      />
+      <ConfirmDialog
+        open={rejoin}
+        onOpenChange={setRejoin}
+        title={`Make ${cluster} the standby of ${sb.cluster}?`}
+        description={
+          <div className="flex flex-col gap-3">
+            <p>
+              {cluster}&apos;s data is first backed up to the bucket. Then it
+              becomes a read-only standby of {sb.cluster}: the first sync
+              replaces its tables with {sb.cluster}&apos;s.
+            </p>
+            <p>
+              Writes {cluster} took that never reached {sb.cluster} survive only
+              in that backup. Switch roles later to make {cluster} the primary
+              again.
+            </p>
+          </div>
+        }
+        typeToConfirm={cluster}
+        confirmLabel="Rejoin as standby"
+        destructive
+        onConfirm={async () => {
+          const res = await standbyAction(cluster, "rejoin")
+          toast.success(`${cluster} is now the standby (${res.note})`)
           await refresh()
         }}
       />
@@ -448,6 +614,126 @@ function StandbyStatus({
         }}
       />
     </>
+  )
+}
+
+// AfterFailover is the checklist once the standby took over: scaling it up is
+// manual (on its own machines), then the old primary comes back as standby.
+function AfterFailover({
+  primary,
+  active,
+  sb,
+  target,
+  isAdmin,
+  onRejoin,
+}: {
+  primary: string
+  active: string
+  sb: Standby
+  target?: Cluster
+  isAdmin: boolean
+  onRejoin: () => void
+}) {
+  const shards = target?.shards ?? []
+  const minReplicas = shards.length
+    ? Math.min(...shards.map((s) => s.replicas.length))
+    : 0
+  const keepers =
+    target?.keeper === "clickhouse-keeper"
+      ? (target.KeeperConf?.keeperNodes ?? []).length
+      : (target?.zkNodes ?? []).length
+  const nodes = (label: string) => (
+    <Link
+      to="/clusters/$cluster/nodes"
+      params={{ cluster: active }}
+      className="underline"
+    >
+      {label}
+    </Link>
+  )
+  const steps: { done?: boolean; title: string; body: React.ReactNode }[] = [
+    {
+      title: `Point your apps at ${active}`,
+      body: target?.docker
+        ? `Native port ${target.docker.ports.tcp}, HTTP ${target.docker.ports.http}, same users and passwords as before.`
+        : "Same users and passwords as before.",
+    },
+    {
+      done: minReplicas >= 2,
+      title: "Add replicas",
+      body: (
+        <>
+          {minReplicas >= 2
+            ? `Every shard has ${minReplicas} or more replicas.`
+            : `Shards have ${minReplicas} replica${minReplicas === 1 ? "" : "s"}: one machine failing loses data access.`}{" "}
+          {nodes("Add replicas on the Nodes page")} on machines you choose.
+        </>
+      ),
+    },
+    {
+      done: keepers >= 3,
+      title: "Run 3 Keepers",
+      body:
+        keepers >= 3
+          ? `${keepers} Keepers.`
+          : `${keepers} Keeper${keepers === 1 ? "" : "s"}: if it stops, ${active} stops taking writes. Add Keepers on machines you choose.`,
+    },
+    {
+      title: "Check sizes",
+      body: (
+        <>
+          Make CPU, memory and disk match the production load:{" "}
+          {nodes("resize on the Nodes page")}.
+        </>
+      ),
+    },
+    {
+      done: sb.fenced,
+      title: `${primary} is read-only`,
+      body: sb.fenced
+        ? `Apps can't write to ${primary} by mistake.`
+        : `${primary} hasn't answered yet; ckman makes it read-only as soon as it does (tried ${formatAgo(sb.fence_tried)}${sb.fence_error ? `: ${sb.fence_error}` : ""}).`,
+    },
+    {
+      title: `Bring ${primary} back as the standby`,
+      body: (
+        <div className="flex flex-col items-start gap-2">
+          <span>
+            Once {primary} is up again: its data is backed up to the bucket and
+            replaced with {active}&apos;s, and syncing restarts the other way.
+            Later, switch roles to make {primary} the primary again.
+          </span>
+          {isAdmin && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!sb.fenced}
+              title={sb.fenced ? undefined : `${primary} has to answer first`}
+              onClick={onRejoin}
+            >
+              Rejoin {primary} as standby…
+            </Button>
+          )}
+        </div>
+      ),
+    },
+  ]
+  return (
+    <ol className="flex flex-col divide-y rounded-lg border">
+      {steps.map((s, i) => (
+        <li key={s.title} className="flex gap-3 p-3 text-sm">
+          <span
+            className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full text-xs ${s.done ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-muted text-muted-foreground"}`}
+          >
+            {s.done ? <CheckIcon className="size-3.5" /> : i + 1}
+          </span>
+          <span className="flex flex-col gap-0.5">
+            <span className="font-medium">{s.title}</span>
+            <span className="text-muted-foreground">{s.body}</span>
+          </span>
+        </li>
+      ))}
+    </ol>
   )
 }
 

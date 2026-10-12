@@ -297,7 +297,16 @@ export type Standby = {
   last_synced: number
   syncs: number
   tables?: Record<string, StandbyTable> | null
+  schema_notes?: string[] | null
+  // lifecycle
+  fenced: boolean // promoted: the old primary is read-only
+  fence_error?: string
+  fence_tried?: string
+  previous?: string // after a rejoin or switchover: the cluster that was primary
+  reversed_at?: string
+  snapshot?: string // rejoin: the old primary's safety backup in the bucket
   // computed
+  role: "primary" | "standby" // which side the asked cluster is
   effective_interval_min: number
   next_sync?: string
   lag_seconds: number
@@ -340,7 +349,7 @@ export function createStandby(body: StandbyRequest) {
 
 export function standbyAction(
   cluster: string,
-  action: "sync" | "pause" | "resume" | "promote",
+  action: "sync" | "pause" | "resume" | "promote" | "rejoin" | "switchover",
   opts: { final_sync?: boolean } = {}
 ) {
   return api.post<{ note: string }>(

@@ -31,7 +31,7 @@ import (
 //
 // Scaling the promoted cluster (replicas, Keepers, sizes) stays manual.
 
-const fenceRetry = 2 * time.Minute
+const fenceRetry = 30 * time.Second
 
 func newPassword() string {
 	b := make([]byte, 24)
