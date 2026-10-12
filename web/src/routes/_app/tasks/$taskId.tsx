@@ -100,6 +100,18 @@ function TaskPage() {
           </div>
         ) : (
           <>
+            {t.Status === "Running" && idleMinutes(t.UpdateTime) >= 15 && (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+                <p className="font-medium">
+                  No progress for {idleMinutes(t.UpdateTime)} minutes
+                </p>
+                <p className="text-muted-foreground">
+                  Long steps (pulling images, copying data) can be quiet, but
+                  this task may be stuck. Check the cluster; if nothing is
+                  happening, stop the task.
+                </p>
+              </div>
+            )}
             {t.Status === "Failed" && message && (
               <ErrorState error={new Error(message)} />
             )}
@@ -179,4 +191,10 @@ function TaskPage() {
       />
     </>
   )
+}
+
+// idleMinutes is how long a task has gone without a status update.
+function idleMinutes(updated: string) {
+  const t = Date.parse(updated)
+  return Number.isNaN(t) ? 0 : Math.floor((Date.now() - t) / 60_000)
 }

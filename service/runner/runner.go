@@ -31,6 +31,60 @@ type RunnerService struct {
 	// when it returns. sync.Map fits the read-mostly access pattern (Cancel
 	// is rare; Store/Delete happen once per task).
 	cancels sync.Map
+	// unsaved holds final outcomes the database didn't take; Sweep writes
+	// them again (taskId -> outcome).
+	unsaved sync.Map
+}
+
+type outcome struct {
+	status int
+	msg    string
+}
+
+// finish records a task's final status. If the database refuses it, the
+// outcome is kept for Sweep, so the task can't stay Running.
+func (runner *RunnerService) finish(task *model.Task, status int, msg string) error {
+	if err := deploy.SetTaskStatus(task, status, msg); err != nil {
+		runner.unsaved.Store(task.TaskId, outcome{status, msg})
+		log.Logger.Errorf("task %s: save final status %d: %v (retrying)", task.TaskId, status, err)
+		return err
+	}
+	return nil
+}
+
+// Sweep heals tasks of this instance whose status didn't reach the
+// database: kept outcomes are written again, and a task the database shows
+// as Running with no goroutine behind it is marked failed. A task that has
+// finished meanwhile is safe: SetTaskStatus never overwrites a final status.
+func (runner *RunnerService) Sweep() {
+	runner.unsaved.Range(func(k, v any) bool {
+		o := v.(outcome)
+		if t, err := repository.Ps.GetTaskbyTaskId(k.(string)); err == nil {
+			if deploy.SetTaskStatus(&t, o.status, o.msg) == nil {
+				runner.unsaved.Delete(k)
+			}
+		}
+		return true
+	})
+	tasks, err := repository.Ps.GetAllTasks()
+	if err != nil {
+		return
+	}
+	for _, t := range tasks {
+		if t.ServerIp != runner.ServerIp || t.Status != model.TaskStatusRunning {
+			continue
+		}
+		if _, alive := runner.cancels.Load(t.TaskId); alive {
+			continue
+		}
+		if _, kept := runner.unsaved.Load(t.TaskId); kept {
+			continue
+		}
+		t := t
+		if deploy.SetTaskStatus(&t, model.TaskStatusFailed, "ckman lost track of this task: it ended but its result wasn't saved") == nil {
+			log.Logger.Warnf("task %s (%s) was Running with nothing running it: marked failed", t.TaskId, t.ClusterName)
+		}
+	}
 }
 
 func NewRunnerService(serverIp string, config config.CKManServerConfig) *RunnerService {
@@ -100,12 +154,16 @@ func (runner *RunnerService) Start() {
 func (runner *RunnerService) Run() {
 	ticker := time.NewTicker(time.Second * time.Duration(runner.Interval))
 	defer ticker.Stop()
+	sweep := time.NewTicker(time.Minute)
+	defer sweep.Stop()
 	for {
 		select {
 		case <-runner.Done:
 			return
 		case <-ticker.C:
 			go runner.CheckTaskEvent()
+		case <-sweep.C:
+			go runner.Sweep()
 		}
 	}
 }
@@ -146,7 +204,7 @@ func (runner *RunnerService) ProcesswithTaskType(task model.Task) error {
 	}()
 	defer func() {
 		if err := recover(); err != nil {
-			_ = deploy.SetTaskStatus(&task, model.TaskStatusFailed, "panic")
+			_ = runner.finish(&task, model.TaskStatusFailed, "panic")
 			log.Logger.Errorf("panic: %v", string(debug.Stack()))
 		}
 	}()
@@ -178,10 +236,10 @@ func (runner *RunnerService) ProcesswithTaskType(task model.Task) error {
 			return nil
 		}
 		deploy.SetNodeStatus(&task, model.NodeStatusFailed, model.ALL_NODES_DEFAULT)
-		_ = deploy.SetTaskStatus(&task, model.TaskStatusFailed, err.Error())
+		_ = runner.finish(&task, model.TaskStatusFailed, err.Error())
 		return err
 	}
-	return deploy.SetTaskStatus(&task, model.TaskStatusSuccess, model.TaskStatusMap[model.TaskStatusSuccess])
+	return runner.finish(&task, model.TaskStatusSuccess, model.TaskStatusMap[model.TaskStatusSuccess])
 }
 
 func (runner *RunnerService) Stop() {
